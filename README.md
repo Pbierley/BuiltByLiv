@@ -28,7 +28,11 @@ Ship the website first. The data model and entitlement check are the same ones t
 
 ## Website UI
 
-The clickable front end lives in `apps/web`. It uses sample content only: no accounts, payments, or saved logs yet.
+The website lives in `apps/web`. Accounts, programs, logs, and messages save to Supabase. Passwords are hashed by Supabase Auth and are never written to the application tables. Copy `apps/web/.env.example` to `apps/web/.env.local`, then run `supabase/migrations/20261105233000_init.sql` in the Supabase SQL editor. In Authentication settings, set the minimum password length to 12. After Liv creates her account, promote it in the SQL editor:
+
+```sql
+update public.profiles set role = 'admin' where email = 'liv@example.com';
+```
 
 ```bash
 cd apps/web

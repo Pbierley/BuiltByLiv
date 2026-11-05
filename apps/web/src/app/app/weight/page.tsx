@@ -1,8 +1,11 @@
 import { WeightLog } from "@/components/weight-log";
-import { member, weighIns } from "@/lib/content";
+import { getViewer, listWeighIns } from "@/lib/queries";
 
 export const metadata = { title: "Body weight" };
 
-export default function WeightPage() {
-  return <WeightLog entries={weighIns} unit={member.units} />;
+export default async function WeightPage() {
+  const viewer = await getViewer();
+  if (!viewer) return null;
+  const entries = await listWeighIns(viewer);
+  return <WeightLog entries={entries} unit={viewer.unit} />;
 }

@@ -1,9 +1,12 @@
 import Link from "next/link";
-import { programs, workoutsFor } from "@/lib/content";
+import { listPrograms, listWorkouts } from "@/lib/queries";
 
 export const metadata = { title: "Programs" };
 
-export default function ProgramsPage() {
+export default async function ProgramsPage() {
+  const programs = await listPrograms();
+  const workouts = await listWorkouts();
+
   return (
     <div className="grid gap-8">
       <div>
@@ -17,7 +20,7 @@ export default function ProgramsPage() {
       </div>
       <ul className="grid gap-4">
         {programs.map((program) => {
-          const days = workoutsFor(program.id);
+          const days = workouts.filter((workout) => workout.programId === program.id);
           return (
             <li key={program.id}>
               <Link

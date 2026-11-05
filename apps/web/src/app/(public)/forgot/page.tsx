@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Field } from "@/components/field";
+import { ForgotForm } from "@/components/auth-forms";
 
 export const metadata = { title: "Reset password" };
 
@@ -12,20 +10,7 @@ export default function ForgotPage() {
       <p className="text-muted-foreground">
         We will email you a link to choose a new one.
       </p>
-      <div className="grid gap-4">
-        <Field label="Email" htmlFor="email">
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            className="h-11"
-          />
-        </Field>
-        <Button className="h-11" asChild>
-          <Link href="/forgot/sent">Send reset link</Link>
-        </Button>
-      </div>
+      <ForgotForm />
       <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground">
         Back to log in
       </Link>

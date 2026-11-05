@@ -2,18 +2,16 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageFallback } from "@/components/page-fallback";
-import {
-  getProgram,
-  prescriptionLabel,
-  programs,
-  workoutsFor,
-} from "@/lib/content";
+import { prescriptionLabel, programs } from "@/lib/content";
+import { listPrograms, listWorkouts } from "@/lib/queries";
 
 export const metadata = { title: "Program" };
 
 export function generateStaticParams() {
   return programs.map((program) => ({ programId: program.id }));
 }
+
+export const dynamicParams = true;
 
 export default function Page({
   params,
@@ -33,9 +31,10 @@ async function ProgramDetail({
   params: Promise<{ programId: string }>;
 }) {
   const { programId } = await params;
-  const program = getProgram(programId);
+  const programsFromDb = await listPrograms();
+  const program = programsFromDb.find((item) => item.id === programId);
   if (!program) notFound();
-  const days = workoutsFor(program.id);
+  const days = await listWorkouts(program.id);
 
   return (
     <div className="grid gap-8">
@@ -70,8 +69,8 @@ async function ProgramDetail({
                 </span>
               </span>
               <span className="text-sm text-muted-foreground">
-                {workout.exercises.length} exercises ·{" "}
-                {prescriptionLabel(workout.exercises[0])}
+                {workout.exercises.length} exercises
+                {workout.exercises[0] ? ` · ${prescriptionLabel(workout.exercises[0])}` : ""}
               </span>
             </Link>
           </li>

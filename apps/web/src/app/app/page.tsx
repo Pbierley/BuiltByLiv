@@ -1,42 +1,52 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { member, programs, weighIns, workoutsFor } from "@/lib/content";
+import { getViewer, listWeighIns, listWorkouts, openWorkoutId } from "@/lib/queries";
 
 export const metadata = { title: "Home" };
 
-export default function MemberHomePage() {
+export default async function MemberHomePage() {
+  const viewer = await getViewer();
+  if (!viewer) return null;
+  const [workouts, weighIns, continueId] = await Promise.all([
+    listWorkouts("strength-foundations"),
+    listWeighIns(viewer),
+    openWorkoutId(viewer),
+  ]);
   const latest = weighIns[0];
-  const foundation = workoutsFor("strength-foundations");
+  const continueWorkout =
+    workouts.find((workout) => workout.id === continueId) ?? workouts[0];
 
   return (
     <div className="grid gap-8">
       <div>
         <p className="text-xs uppercase tracking-[0.16em] text-primary">
-          Trial · {member.trialDaysLeft} days left
+          {viewer.statusLabel}
         </p>
         <h1 className="mt-2 font-display text-4xl tracking-tight sm:text-5xl">
-          Welcome back, {member.name.split(" ")[0]}
+          Welcome back, {viewer.name.split(" ")[0]}
         </h1>
       </div>
 
       <section className="grid gap-4 lg:grid-cols-5">
-        <Link
-          href="/app/workouts/lower-a"
-          className="grid gap-6 border border-ink bg-ink p-6 text-background lg:col-span-3"
-        >
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-[0.16em] text-background/60">
-              Continue
-            </p>
-            <Badge>In progress</Badge>
-          </div>
-          <div>
-            <h2 className="font-display text-4xl tracking-tight">Lower A</h2>
-            <p className="mt-2 text-background/70">
-              Back squat, set 3 still open. 145 lb is in the log for set 2.
-            </p>
-          </div>
-        </Link>
+        {continueWorkout ? (
+          <Link
+            href={`/app/workouts/${continueWorkout.id}`}
+            className="grid gap-6 border border-ink bg-ink p-6 text-background lg:col-span-3"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.16em] text-background/60">
+                {continueId ? "Continue" : "Start"}
+              </p>
+              <Badge>{continueId ? "In progress" : "Ready"}</Badge>
+            </div>
+            <div>
+              <h2 className="font-display text-4xl tracking-tight">
+                {continueWorkout.title}
+              </h2>
+              <p className="mt-2 text-background/70">{continueWorkout.summary}</p>
+            </div>
+          </Link>
+        ) : null}
         <Link
           href="/app/weight"
           className="grid content-between gap-6 border border-border bg-card p-6 lg:col-span-2"
@@ -45,12 +55,14 @@ export default function MemberHomePage() {
             Latest weigh-in
           </p>
           <p className="font-display text-6xl tabular-nums tracking-tight">
-            {latest.weight}
+            {latest ? latest.weight : "—"}
             <span className="ml-2 font-sans text-lg text-muted-foreground">
-              {member.units}
+              {viewer.unit}
             </span>
           </p>
-          <p className="text-sm text-muted-foreground">{latest.date}</p>
+          <p className="text-sm text-muted-foreground">
+            {latest ? latest.date : "No weigh-in yet"}
+          </p>
         </Link>
       </section>
 
@@ -62,7 +74,7 @@ export default function MemberHomePage() {
           </Link>
         </div>
         <ul className="divide-y divide-border border border-border bg-card">
-          {foundation.map((workout) => (
+          {workouts.map((workout) => (
             <li key={workout.id}>
               <Link
                 href={`/app/workouts/${workout.id}`}
@@ -81,9 +93,6 @@ export default function MemberHomePage() {
             </li>
           ))}
         </ul>
-        <p className="text-sm text-muted-foreground">
-          Also on your membership: {programs[1].title}.
-        </p>
       </section>
     </div>
   );

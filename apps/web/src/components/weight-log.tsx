@@ -1,24 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/field";
-import { weighIns as sampleWeighIns } from "@/lib/content";
-
-type Entry = (typeof sampleWeighIns)[number];
+import { deleteWeighIn, saveWeighIn } from "@/lib/actions";
 
 export function WeightLog({
   entries,
   unit,
 }: {
-  entries: Entry[];
+  entries: { id: string; date: string; weight: number }[];
   unit: "lb" | "kg";
 }) {
-  const [rows, setRows] = useState(entries);
+  const router = useRouter();
   const [weight, setWeight] = useState("");
-  const [date, setDate] = useState("Nov 5, 2026");
-  const latest = rows[0];
+  const [error, setError] = useState("");
+  const latest = entries[0];
 
   return (
     <div className="grid gap-8">
@@ -44,36 +43,35 @@ export function WeightLog({
         </div>
         <form
           className="grid gap-3 sm:justify-self-end"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            const value = Number(weight);
-            if (!weight || Number.isNaN(value)) return;
-            setRows((current) => [
-              { id: `local-${current.length + 1}`, date, weight: value },
-              ...current,
-            ]);
+            const result = await saveWeighIn(new FormData(event.currentTarget));
+            if (result.error) {
+              setError(result.error);
+              return;
+            }
+            setError("");
             setWeight("");
+            router.refresh();
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Date" htmlFor="weigh-date">
-              <Input
-                id="weigh-date"
-                className="h-11"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-              />
+              <Input id="weigh-date" name="date" type="date" className="h-11" required />
             </Field>
             <Field label={`Weight (${unit})`} htmlFor="weigh-weight">
               <Input
                 id="weigh-weight"
+                name="weight"
                 className="h-11"
                 inputMode="decimal"
                 value={weight}
                 onChange={(event) => setWeight(event.target.value)}
+                required
               />
             </Field>
           </div>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <Button type="submit" className="h-11">
             Save weigh-in
           </Button>
@@ -81,7 +79,7 @@ export function WeightLog({
       </section>
 
       <ul className="divide-y divide-border border border-border bg-card">
-        {rows.map((entry) => (
+        {entries.map((entry) => (
           <li
             key={entry.id}
             className="flex items-center justify-between gap-4 px-4 py-3"
@@ -95,11 +93,11 @@ export function WeightLog({
             <button
               type="button"
               className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              onClick={() =>
-                setRows((current) =>
-                  current.filter((item) => item.id !== entry.id),
-                )
-              }
+              onClick={async () => {
+                const result = await deleteWeighIn(entry.id);
+                if (result.error) setError(result.error);
+                else router.refresh();
+              }}
             >
               Remove
             </button>

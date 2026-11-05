@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChevronLeft, Pause, Play, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import {
   type Workout,
 } from "@/lib/content";
 import { cn } from "cn";
+import { saveSession } from "@/lib/actions";
 
 export function WorkoutSession({
   workout,
@@ -36,6 +38,8 @@ export function WorkoutSession({
   );
   const [runningKey, setRunningKey] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [error, setError] = useState("");
+  const router = useRouter();
 
   const exercise =
     workout.exercises.find((item) => item.id === exerciseId) ??
@@ -61,6 +65,29 @@ export function WorkoutSession({
   if (!exercise) return null;
 
   const rows = setsByExercise[exercise.id] ?? [];
+
+  function loggedPayload() {
+    return Object.entries(setsByExercise).flatMap(([exerciseId, rows]) =>
+      rows.map((set, index) => ({
+        exerciseId,
+        index,
+        reps: set.reps,
+        weight: set.weight,
+        durationSeconds: set.durationSeconds,
+        skipped: set.skipped,
+      })),
+    );
+  }
+
+  async function persist(complete: boolean) {
+    const result = await saveSession({
+      workoutId: workout.id,
+      complete,
+      sets: loggedPayload(),
+    });
+    if (result.error) setError(result.error);
+    return !result.error;
+  }
 
   function updateSet(index: number, patch: Partial<LoggedSet>) {
     setSetsByExercise((current) => ({
@@ -96,6 +123,7 @@ export function WorkoutSession({
               type="button"
               aria-pressed={selected}
               onClick={() => {
+                void persist(false);
                 setRunningKey(null);
                 setPlaying(false);
                 setExerciseId(item.id);
@@ -118,6 +146,15 @@ export function WorkoutSession({
 
       <div className="grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <section className="grid min-w-0 gap-4">
+          {exercise.hasVideo ? (
+            <video
+              key={exercise.id}
+              className="aspect-video w-full bg-ink"
+              controls
+              playsInline
+              src={`/api/videos/${exercise.id}`}
+            />
+          ) : null}
           <div className="overflow-hidden border border-ink bg-ink text-background">
             <div className="flex aspect-video flex-col justify-between p-5">
               <p className="text-xs uppercase tracking-[0.16em] text-background/70">
@@ -268,8 +305,16 @@ export function WorkoutSession({
             <Plus className="size-4" aria-hidden />
             Add a set
           </Button>
-          <Button className="h-11" asChild>
-            <Link href="/app/history">Mark workout complete</Link>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <Button
+            className="h-11"
+            type="button"
+            onClick={async () => {
+              const saved = await persist(true);
+              if (saved) router.push("/app/history");
+            }}
+          >
+            Mark workout complete
           </Button>
         </section>
       </div>

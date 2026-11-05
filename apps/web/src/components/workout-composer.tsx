@@ -7,7 +7,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/field";
 import { VideoUpload } from "@/components/video-upload";
 import {
-  programs,
   trackingLabel,
   type Exercise,
   type TrackingType,
@@ -15,7 +14,7 @@ import {
 } from "@/lib/content";
 import { cn } from "cn";
 
-export type VideoClip = { name: string; url: string };
+export type VideoClip = { name: string; url: string; file: File };
 
 type DraftExercise = {
   key: string;
@@ -29,20 +28,23 @@ type DraftExercise = {
   restSeconds: string;
   videoName: string;
   videoUrl: string;
+  videoFile: File | null;
 };
 
 const trackingTypes: TrackingType[] = ["weight_reps", "reps", "duration"];
 
 export function WorkoutComposer({
+  programs,
   onCancel,
   onCreate,
 }: {
+  programs: { id: string; title: string }[];
   onCancel: () => void;
-  onCreate: (workout: Workout, videos: Record<string, VideoClip>) => void;
+  onCreate: (workout: Workout, videos: Record<string, VideoClip>) => void | Promise<void>;
 }) {
   const nextKey = useRef(1);
   const serial = useRef(0);
-  const [programId, setProgramId] = useState(programs[0].id);
+  const [programId, setProgramId] = useState(programs[0]?.id ?? "");
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [exercises, setExercises] = useState<DraftExercise[]>([
@@ -64,11 +66,12 @@ export function WorkoutComposer({
       current.map((exercise) => {
         if (exercise.key !== key) return exercise;
         if (exercise.videoUrl) URL.revokeObjectURL(exercise.videoUrl);
-        if (!file) return { ...exercise, videoName: "", videoUrl: "" };
+        if (!file) return { ...exercise, videoName: "", videoUrl: "", videoFile: null };
         return {
           ...exercise,
           videoName: file.name,
           videoUrl: URL.createObjectURL(file),
+          videoFile: file,
         };
       }),
     );
@@ -93,8 +96,12 @@ export function WorkoutComposer({
         const videos: Record<string, VideoClip> = {};
         const built: Exercise[] = exercises.map((exercise, index) => {
           const id = `custom-${serial.current}-ex-${index + 1}`;
-          if (exercise.videoUrl) {
-            videos[id] = { name: exercise.videoName, url: exercise.videoUrl };
+          if (exercise.videoFile) {
+            videos[id] = {
+              name: exercise.videoName,
+              url: exercise.videoUrl,
+              file: exercise.videoFile,
+            };
           }
           const sets = numberOr(exercise.sets, 3);
           return {
@@ -361,6 +368,7 @@ function blankExercise(key: string): DraftExercise {
     restSeconds: "90",
     videoName: "",
     videoUrl: "",
+    videoFile: null,
   };
 }
 

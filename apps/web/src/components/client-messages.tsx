@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { sendMessage } from "@/lib/actions";
 import { cn } from "cn";
 
 type Note = {
@@ -12,7 +13,7 @@ type Note = {
   body: string;
 };
 
-type Thread = {
+export type Thread = {
   id: string;
   name: string;
   email: string;
@@ -20,69 +21,15 @@ type Thread = {
   messages: Note[];
 };
 
-const startingThreads: Thread[] = [
-  {
-    id: "jordan",
-    name: "Jordan Hale",
-    email: "jordan@example.com",
-    status: "Trial",
-    messages: [
-      {
-        id: "j1",
-        from: "client",
-        at: "Nov 4",
-        body: "The walking lunge bothered the front of my knee. Should I shorten the step?",
-      },
-    ],
-  },
-  {
-    id: "alex",
-    name: "Alex Rivera",
-    email: "alex@example.com",
-    status: "Trial",
-    messages: [
-      {
-        id: "a1",
-        from: "liv",
-        at: "Nov 2",
-        body: "Start the bench where the last rep of each set is still clean. Film the third set if you want a form check.",
-      },
-      {
-        id: "a2",
-        from: "client",
-        at: "Nov 3",
-        body: "I used 65 lb and the last rep was shaky. Stay there next week?",
-      },
-    ],
-  },
-  {
-    id: "sam",
-    name: "Sam Okonkwo",
-    email: "sam@example.com",
-    status: "Member",
-    messages: [
-      {
-        id: "s1",
-        from: "liv",
-        at: "Oct 28",
-        body: "If the dumbbells are taken, a cable row is a fine swap for the one-arm row.",
-      },
-      {
-        id: "s2",
-        from: "client",
-        at: "Oct 28",
-        body: "Perfect, that's what I did.",
-      },
-    ],
-  },
-];
-
 export function ClientMessages({
+  threads: initialThreads,
   onWaitingChange,
 }: {
+  threads: Thread[];
   onWaitingChange?: (waiting: number) => void;
 }) {
-  const [threads, setThreads] = useState(startingThreads);
+  const [threads, setThreads] = useState(initialThreads);
+  const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
@@ -94,9 +41,15 @@ export function ClientMessages({
     onWaitingChange?.(waiting);
   }, [threads, onWaitingChange]);
 
-  function send() {
+  async function send() {
     const body = draft.trim();
     if (!body || !selected) return;
+    const result = await sendMessage(selected.id, body);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setError("");
     setThreads((current) =>
       current.map((thread) =>
         thread.id === selected.id
@@ -208,7 +161,8 @@ export function ClientMessages({
                 placeholder={`Reply to ${selected.name.split(" ")[0]}`}
                 aria-label={`Message to ${selected.name}`}
               />
-              <Button type="button" className="h-11 w-fit" onClick={send}>
+              {error ? <p className="text-sm text-destructive">{error}</p> : null}
+              <Button type="button" className="h-11 w-fit" onClick={() => void send()}>
                 Send
               </Button>
             </div>

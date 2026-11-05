@@ -4,13 +4,24 @@ import { useState } from "react";
 import Link from "next/link";
 import { cn } from "cn";
 import { AdminEditor } from "@/components/admin-editor";
-import { ClientMessages } from "@/components/client-messages";
+import { ClientMessages, type Thread } from "@/components/client-messages";
+import type { Workout } from "@/lib/content";
 
 type Section = "workouts" | "clients";
 
-export function AdminStudio() {
+export function AdminStudio({
+  programs,
+  workouts,
+  threads,
+}: {
+  programs: { id: string; title: string }[];
+  workouts: Workout[];
+  threads: Thread[];
+}) {
   const [section, setSection] = useState<Section>("workouts");
-  const [waiting, setWaiting] = useState(3);
+  const [waiting, setWaiting] = useState(
+    threads.filter((thread) => thread.messages.at(-1)?.from === "client").length,
+  );
 
   return (
     <div className="min-h-full flex-1 bg-background">
@@ -46,10 +57,14 @@ export function AdminStudio() {
       </header>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
         <div className={section === "workouts" ? undefined : "hidden"}>
-          <AdminEditor />
+          <AdminEditor
+            key={workouts.map((workout) => workout.id).join()}
+            programs={programs}
+            workouts={workouts}
+          />
         </div>
         <div className={section === "clients" ? undefined : "hidden"}>
-          <ClientMessages onWaitingChange={setWaiting} />
+          <ClientMessages threads={threads} onWaitingChange={setWaiting} />
         </div>
       </div>
     </div>

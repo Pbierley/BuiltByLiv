@@ -3,11 +3,18 @@
 import { useState } from "react";
 import { cn } from "cn";
 
-export function UnitToggle({ initial = "lb" }: { initial?: "lb" | "kg" }) {
+export function UnitToggle({
+  initial = "lb",
+  name = "unit",
+}: {
+  initial?: "lb" | "kg";
+  name?: string;
+}) {
   const [unit, setUnit] = useState(initial);
 
   return (
     <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Units">
+      <input type="hidden" name={name} value={unit} />
       {(
         [
           ["lb", "Pounds"],

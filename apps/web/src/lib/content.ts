@@ -33,6 +33,7 @@ export type Exercise = {
   targetDurationSeconds?: number;
   restSeconds: number;
   logged: LoggedSet[];
+  hasVideo?: boolean;
 };
 
 export type Workout = {

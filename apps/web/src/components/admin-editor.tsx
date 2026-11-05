@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,40 +13,41 @@ import {
   WorkoutComposer,
   type VideoClip,
 } from "@/components/workout-composer";
-import {
-  programs,
-  trackingLabel,
-  workouts,
-  type TrackingType,
-  type Workout,
-} from "@/lib/content";
+import { trackingLabel, type TrackingType, type Workout } from "@/lib/content";
+import { createWorkout, updateExercise, uploadExerciseVideo } from "@/lib/actions";
 import { cn } from "cn";
 
 const trackingTypes: TrackingType[] = ["weight_reps", "reps", "duration"];
 
-const seedIds = new Set(workouts.map((workout) => workout.id));
-
-export function AdminEditor() {
-  const [library, setLibrary] = useState<Workout[]>(workouts);
-  const [programId, setProgramId] = useState(programs[0].id);
+export function AdminEditor({
+  programs,
+  workouts,
+}: {
+  programs: { id: string; title: string }[];
+  workouts: Workout[];
+}) {
+  const router = useRouter();
+  const library = workouts;
+  const [programId, setProgramId] = useState(programs[0]?.id ?? "");
+  const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [videos, setVideos] = useState<Record<string, VideoClip>>({});
   const programWorkouts = library.filter(
     (workout) => workout.programId === programId,
   );
-  const [workoutId, setWorkoutId] = useState(programWorkouts[0].id);
+  const [workoutId, setWorkoutId] = useState(programWorkouts[0]?.id ?? "");
   const workout =
     programWorkouts.find((item) => item.id === workoutId) ?? programWorkouts[0];
-  const [exerciseId, setExerciseId] = useState(workout.exercises[0].id);
+  const [exerciseId, setExerciseId] = useState(workout?.exercises[0]?.id ?? "");
   const exercise =
-    workout.exercises.find((item) => item.id === exerciseId) ??
-    workout.exercises[0];
+    workout?.exercises.find((item) => item.id === exerciseId) ??
+    workout?.exercises[0];
   const [trackingType, setTrackingType] = useState<TrackingType>(
-    exercise.trackingType,
+    exercise?.trackingType ?? "weight_reps",
   );
   const [published, setPublished] = useState(true);
   const [saved, setSaved] = useState(false);
-  const clip = videos[exercise.id];
+  const clip = exercise ? videos[exercise.id] : undefined;
 
   function chooseProgram(nextProgramId: string) {
     const nextWorkouts = library.filter(
@@ -53,10 +55,11 @@ export function AdminEditor() {
     );
     setProgramId(nextProgramId);
     setCreating(false);
-    if (!nextWorkouts[0]) return;
+    const nextExercise = nextWorkouts[0]?.exercises[0];
+    if (!nextWorkouts[0] || !nextExercise) return;
     setWorkoutId(nextWorkouts[0].id);
-    setExerciseId(nextWorkouts[0].exercises[0].id);
-    setTrackingType(nextWorkouts[0].exercises[0].trackingType);
+    setExerciseId(nextExercise.id);
+    setTrackingType(nextExercise.trackingType);
     setSaved(false);
   }
 
@@ -65,13 +68,15 @@ export function AdminEditor() {
     if (!next) return;
     setCreating(false);
     setWorkoutId(next.id);
-    setExerciseId(next.exercises[0].id);
-    setTrackingType(next.exercises[0].trackingType);
+    const nextExercise = next.exercises[0];
+    if (!nextExercise) return;
+    setExerciseId(nextExercise.id);
+    setTrackingType(nextExercise.trackingType);
     setSaved(false);
   }
 
   function chooseExercise(nextExerciseId: string) {
-    const next = workout.exercises.find((item) => item.id === nextExerciseId);
+    const next = workout?.exercises.find((item) => item.id === nextExerciseId);
     if (!next) return;
     setExerciseId(next.id);
     setTrackingType(next.trackingType);
@@ -79,20 +84,29 @@ export function AdminEditor() {
   }
 
   function attachVideo(file: File | null) {
+    if (!exercise) return;
+    const exerciseId = exercise.id;
     setVideos((current) => {
-      const previous = current[exercise.id];
+      const previous = current[exerciseId];
       if (previous?.url) URL.revokeObjectURL(previous.url);
       if (!file) {
         const next = { ...current };
-        delete next[exercise.id];
+        delete next[exerciseId];
         return next;
       }
       return {
         ...current,
-        [exercise.id]: { name: file.name, url: URL.createObjectURL(file) },
+        [exerciseId]: { name: file.name, url: URL.createObjectURL(file), file },
       };
     });
     setSaved(false);
+    if (!file) return;
+    const body = new FormData();
+    body.set("file", file);
+    void uploadExerciseVideo(exerciseId, body).then((result) => {
+      setError(result.error ?? "");
+      if (!result.error) router.refresh();
+    });
   }
 
   return (
@@ -146,19 +160,12 @@ export function AdminEditor() {
               onClick={() => chooseWorkout(item.id)}
               className={cn(
                 "border px-3 py-2 text-left text-sm",
-                item.id === workout.id
+                item.id === workout?.id
                   ? "border-foreground bg-secondary"
                   : "border-border bg-card",
               )}
             >
-              <span className="flex items-center justify-between gap-2">
-                <span>{item.title}</span>
-                {seedIds.has(item.id) ? null : (
-                  <span className="text-xs uppercase tracking-[0.12em]">
-                    New
-                  </span>
-                )}
-              </span>
+              <span>{item.title}</span>
             </button>
           ))}
         </div>
@@ -166,24 +173,65 @@ export function AdminEditor() {
 
       {creating ? (
         <WorkoutComposer
+          programs={programs}
           onCancel={() => setCreating(false)}
-          onCreate={(created, clips) => {
-            setLibrary((current) => [created, ...current]);
-            setProgramId(created.programId);
-            setWorkoutId(created.id);
-            setExerciseId(created.exercises[0].id);
-            setTrackingType(created.exercises[0].trackingType);
-            setVideos((current) => ({ ...current, ...clips }));
+          onCreate={async (created, clips) => {
+            const result = await createWorkout({
+              programId: created.programId,
+              title: created.title,
+              summary: created.summary,
+              exercises: created.exercises.map((item) => ({
+                name: item.name,
+                coaching: item.coaching,
+                cue: item.cue,
+                trackingType: item.trackingType,
+                sets: item.sets,
+                targetReps: item.targetReps,
+                targetDurationSeconds: item.targetDurationSeconds,
+                restSeconds: item.restSeconds,
+              })),
+            });
+            if (result.error || !result.exerciseIds) {
+              setError(result.error ?? "The workout could not be created.");
+              return;
+            }
+            for (const [index, exerciseId] of result.exerciseIds.entries()) {
+              const file = clips[created.exercises[index]?.id ?? ""]?.file;
+              if (!file) continue;
+              const body = new FormData();
+              body.set("file", file);
+              const uploaded = await uploadExerciseVideo(exerciseId, body);
+              if (uploaded.error) setError(uploaded.error);
+            }
             setCreating(false);
             setSaved(true);
+            router.refresh();
           }}
         />
-      ) : (
+      ) : workout && exercise ? (
       <form
         className="grid min-w-0 gap-5 border border-border bg-card p-4 sm:p-5"
-        onSubmit={(event) => {
+        onSubmit={async (event) => {
           event.preventDefault();
-          setSaved(true);
+          if (!exercise) return;
+          const form = new FormData(event.currentTarget);
+          const result = await updateExercise({
+            exerciseId: exercise.id,
+            name: form.get("name"),
+            coaching: form.get("coaching"),
+            cue: String(form.get("cue") ?? ""),
+            trackingType,
+            sets: Number(form.get("sets")),
+            targetReps: Number(form.get("reps") || exercise.targetReps || 8),
+            targetDurationSeconds: Number(
+              form.get("duration") || exercise.targetDurationSeconds || 45,
+            ),
+            restSeconds: Number(form.get("rest")),
+            published,
+          });
+          setError(result.error ?? "");
+          setSaved(!result.error);
+          if (!result.error) router.refresh();
         }}
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -220,6 +268,7 @@ export function AdminEditor() {
           <Input
             id="exercise-name"
             className="h-11"
+            name="name"
             defaultValue={exercise.name}
             key={`name-${exercise.id}`}
           />
@@ -228,6 +277,7 @@ export function AdminEditor() {
           <Textarea
             id="exercise-notes"
             rows={4}
+            name="coaching"
             defaultValue={exercise.coaching}
             key={`notes-${exercise.id}`}
           />
@@ -237,6 +287,7 @@ export function AdminEditor() {
             id="exercise-cue"
             className="h-11"
             placeholder="Optional, such as slow eccentric"
+            name="cue"
             defaultValue={exercise.cue ?? ""}
             key={`cue-${exercise.id}`}
           />
@@ -273,6 +324,7 @@ export function AdminEditor() {
               id="sets"
               className="h-11"
               inputMode="numeric"
+              name="sets"
               defaultValue={exercise.sets}
               key={`sets-${exercise.id}`}
             />
@@ -283,6 +335,7 @@ export function AdminEditor() {
                 id="target-duration"
                 className="h-11"
                 inputMode="numeric"
+                name="duration"
                 defaultValue={exercise.targetDurationSeconds ?? 45}
                 key={`duration-${exercise.id}`}
               />
@@ -293,6 +346,7 @@ export function AdminEditor() {
                 id="target-reps"
                 className="h-11"
                 inputMode="numeric"
+                name="reps"
                 defaultValue={exercise.targetReps ?? 8}
                 key={`reps-${exercise.id}`}
               />
@@ -303,6 +357,7 @@ export function AdminEditor() {
               id="rest"
               className="h-11"
               inputMode="numeric"
+              name="rest"
               defaultValue={exercise.restSeconds}
               key={`rest-${exercise.id}`}
             />
@@ -332,16 +387,17 @@ export function AdminEditor() {
           <Button type="submit" className="h-11">
             Save exercise
           </Button>
-          {seedIds.has(workout.id) ? (
-            <Button variant="ghost" asChild>
-              <Link href={`/app/workouts/${workout.id}`}>Preview member view</Link>
-            </Button>
-          ) : null}
+          <Button variant="ghost" asChild>
+            <Link href={`/app/workouts/${workout.id}`}>Preview member view</Link>
+          </Button>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {saved ? (
-            <p className="text-sm text-muted-foreground">Saved on this screen.</p>
+            <p className="text-sm text-muted-foreground">Saved.</p>
           ) : null}
         </div>
       </form>
+      ) : (
+        <p className="text-sm text-muted-foreground">No workouts in this program yet.</p>
       )}
     </div>
   );

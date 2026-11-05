@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 import { Logo } from "@/components/logo";
-import { member } from "@/lib/content";
 
 const items = [
   {
@@ -47,7 +46,13 @@ const items = [
   },
 ];
 
-export function MemberShell({ children }: { children: React.ReactNode }) {
+export function MemberShell({
+  children,
+  viewer,
+}: {
+  children: React.ReactNode;
+  viewer: { name: string; email: string; statusLabel: string };
+}) {
   const path = usePathname();
 
   return (
@@ -55,7 +60,7 @@ export function MemberShell({ children }: { children: React.ReactNode }) {
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-border bg-card px-4 py-6 md:flex">
         <Logo href="/app" />
         <p className="mt-4 text-sm text-muted-foreground">
-          Trial · {member.trialDaysLeft} days left
+          {viewer.statusLabel}
         </p>
         <nav className="mt-8 grid gap-1">
           {items.map((item) => (
@@ -63,8 +68,8 @@ export function MemberShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <p className="mt-auto pt-8 text-sm">
-          <span className="block font-medium">{member.name}</span>
-          <span className="text-muted-foreground">{member.email}</span>
+          <span className="block font-medium">{viewer.name}</span>
+          <span className="text-muted-foreground">{viewer.email}</span>
         </p>
       </aside>
 
@@ -72,7 +77,7 @@ export function MemberShell({ children }: { children: React.ReactNode }) {
         <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3 md:hidden">
           <Logo href="/app" className="min-w-0 [&_span:last-child]:truncate" />
           <p className="shrink-0 text-sm text-muted-foreground">
-            {member.trialDaysLeft} days left
+            {viewer.statusLabel}
           </p>
         </header>
         <div className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-8 md:py-10 md:pb-10">

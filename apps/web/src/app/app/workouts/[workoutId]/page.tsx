@@ -2,13 +2,16 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { PageFallback } from "@/components/page-fallback";
 import { WorkoutSession } from "@/components/workout-session";
-import { getWorkout, member, workouts } from "@/lib/content";
+import { workouts } from "@/lib/content";
+import { getViewer, getWorkoutForViewer } from "@/lib/queries";
 
 export const metadata = { title: "Workout" };
 
 export function generateStaticParams() {
   return workouts.map((workout) => ({ workoutId: workout.id }));
 }
+
+export const dynamicParams = true;
 
 export default function Page({
   params,
@@ -28,7 +31,9 @@ async function WorkoutDetail({
   params: Promise<{ workoutId: string }>;
 }) {
   const { workoutId } = await params;
-  const workout = getWorkout(workoutId);
+  const viewer = await getViewer();
+  if (!viewer) return null;
+  const workout = await getWorkoutForViewer(workoutId, viewer);
   if (!workout) notFound();
-  return <WorkoutSession workout={workout} unit={member.units} />;
+  return <WorkoutSession workout={workout} unit={viewer.unit} />;
 }
