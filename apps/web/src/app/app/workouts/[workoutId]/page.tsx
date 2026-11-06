@@ -11,8 +11,6 @@ export function generateStaticParams() {
   return workouts.map((workout) => ({ workoutId: workout.id }));
 }
 
-export const dynamicParams = true;
-
 export default function Page({
   params,
 }: {

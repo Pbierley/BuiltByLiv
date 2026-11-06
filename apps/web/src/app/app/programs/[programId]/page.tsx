@@ -11,8 +11,6 @@ export function generateStaticParams() {
   return programs.map((program) => ({ programId: program.id }));
 }
 
-export const dynamicParams = true;
-
 export default function Page({
   params,
 }: {

@@ -18,8 +18,8 @@ export function supabaseEnv() {
 }
 
 export async function createSupabase() {
-  const { url, anonKey } = supabaseEnv();
   const cookieStore = await cookies();
+  const { url, anonKey } = supabaseEnv();
 
   return createServerClient(url, anonKey, {
     cookies: {

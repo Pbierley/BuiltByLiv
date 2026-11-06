@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SetupNeeded } from "@/components/setup-needed";
@@ -6,7 +7,19 @@ import { ConfigError, getViewer } from "@/lib/queries";
 
 export const metadata = { title: "Before you start" };
 
-export default async function AcknowledgePage({
+export default function AcknowledgePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  return (
+    <Suspense fallback={<div className="px-5 py-16 text-sm text-muted-foreground">Loading</div>}>
+      <AcknowledgeContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function AcknowledgeContent({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string }>;
