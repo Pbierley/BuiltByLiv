@@ -155,9 +155,9 @@ export function WorkoutSession({
               src={`/api/videos/${exercise.id}`}
             />
           ) : null}
-          <div className="overflow-hidden border border-ink bg-ink text-background">
+          <div className="overflow-hidden border border-border bg-card text-foreground">
             <div className="flex aspect-video flex-col justify-between p-5">
-              <p className="text-xs uppercase tracking-[0.16em] text-background/70">
+              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                 Demo
               </p>
               <div className="grid justify-items-center gap-3">
@@ -175,7 +175,7 @@ export function WorkoutSession({
                 </button>
                 <p className="font-display text-2xl">{exercise.name}</p>
               </div>
-              <label className="grid gap-2 text-xs text-background/70">
+              <label className="grid gap-2 text-xs text-muted-foreground">
                 Playback
                 <input
                   type="range"

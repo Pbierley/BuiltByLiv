@@ -75,7 +75,7 @@ export function MemberShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3 md:hidden">
-          <Logo href="/app" className="min-w-0 [&_span:last-child]:truncate" />
+          <Logo href="/app" markClassName="size-12" />
           <p className="shrink-0 text-sm text-muted-foreground">
             {viewer.statusLabel}
           </p>

@@ -31,10 +31,10 @@ export default async function MemberHomePage() {
         {continueWorkout ? (
           <Link
             href={`/app/workouts/${continueWorkout.id}`}
-            className="grid gap-6 border border-ink bg-ink p-6 text-background lg:col-span-3"
+            className="grid gap-6 border border-border bg-card p-6 text-foreground lg:col-span-3"
           >
             <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.16em] text-background/60">
+              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                 {continueId ? "Continue" : "Start"}
               </p>
               <Badge>{continueId ? "In progress" : "Ready"}</Badge>
@@ -43,7 +43,7 @@ export default async function MemberHomePage() {
               <h2 className="font-display text-4xl tracking-tight">
                 {continueWorkout.title}
               </h2>
-              <p className="mt-2 text-background/70">{continueWorkout.summary}</p>
+              <p className="mt-2 text-muted-foreground">{continueWorkout.summary}</p>
             </div>
           </Link>
         ) : null}

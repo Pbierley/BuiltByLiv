@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-border/80 bg-background/90 backdrop-blur">
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:px-5">
-        <Logo className="min-w-0 [&_span:last-child]:truncate" />
+      <div className="mx-auto flex h-20 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:px-5">
+        <Logo />
         <nav className="flex shrink-0 items-center gap-1 sm:gap-3">
           <Button variant="ghost" className="px-2 sm:px-4" asChild>
             <Link href="/login">Log in</Link>

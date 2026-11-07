@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { Logo } from "@/components/logo";
 
 export function SiteFooter() {
   return (
     <footer className="border-t border-border">
       <div className="mx-auto grid w-full max-w-6xl gap-6 px-5 py-10 sm:grid-cols-[1fr_auto] sm:items-end">
         <div className="grid gap-3">
-          <p className="font-display text-xl tracking-tight">Built by Liv</p>
+          <Logo markClassName="size-16" />
           <p className="max-w-md text-sm leading-6 text-muted-foreground">
             Fitness coaching, not medical advice. Get cleared for exercise
             before you start, and stop if something hurts in a way that is not

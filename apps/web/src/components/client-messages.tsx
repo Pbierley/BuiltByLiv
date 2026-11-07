@@ -142,7 +142,7 @@ export function ClientMessages({
                   className={cn(
                     "max-w-[36rem] border px-3 py-3 text-sm leading-6",
                     message.from === "liv"
-                      ? "justify-self-end border-ink bg-ink text-background"
+                      ? "justify-self-end border-primary bg-primary text-primary-foreground"
                       : "justify-self-start border-border bg-background",
                   )}
                 >

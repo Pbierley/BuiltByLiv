@@ -1,24 +1,30 @@
+import Image from "next/image";
 import Link from "next/link";
 import { cn } from "cn";
 
 export function Logo({
   className,
   href = "/",
+  markClassName,
 }: {
   className?: string;
   href?: string;
+  markClassName?: string;
 }) {
   return (
     <Link
       href={href}
-      className={cn("inline-flex items-center gap-2.5", className)}
+      aria-label="Built by Liv"
+      className={cn("inline-flex items-center", className)}
     >
-      <span className="grid size-8 place-items-center bg-primary font-display text-sm text-primary-foreground">
-        L
-      </span>
-      <span className="font-display text-lg leading-none tracking-tight">
-        Built by Liv
-      </span>
+      <Image
+        src="/logo.png"
+        alt="Built by Liv"
+        width={512}
+        height={512}
+        priority
+        className={cn("size-14 object-contain sm:size-16", markClassName)}
+      />
     </Link>
   );
 }

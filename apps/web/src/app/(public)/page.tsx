@@ -54,9 +54,9 @@ export default function HomePage() {
           </div>
         </div>
 
-        <article className="border border-ink bg-ink p-5 text-background sm:p-6">
+        <article className="border border-border bg-card p-5 text-foreground sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-background/60">
+            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
               Lower A · in progress
             </p>
             <Badge>Set 3 of 3</Badge>
@@ -64,7 +64,7 @@ export default function HomePage() {
           <h2 className="mt-6 font-display text-4xl tracking-tight">
             Back squat
           </h2>
-          <p className="mt-2 text-background/70">3 × 8 · 2 min rest</p>
+          <p className="mt-2 text-muted-foreground">3 × 8 · 2 min rest</p>
           <div className="mt-6 grid gap-2">
             <SetRow set="1" detail="135 lb × 8" done />
             <SetRow set="2" detail="145 lb × 8" done />
@@ -170,9 +170,9 @@ function SetRow({
   done?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between border border-background/15 px-3 py-3 text-sm">
-      <span className="text-background/60">Set {set}</span>
-      <span className={done ? "text-background" : "text-primary"}>{detail}</span>
+    <div className="flex items-center justify-between border border-border px-3 py-3 text-sm">
+      <span className="text-muted-foreground">Set {set}</span>
+      <span className={done ? "text-foreground" : "text-primary"}>{detail}</span>
     </div>
   );
 }
