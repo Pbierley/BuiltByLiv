@@ -377,10 +377,8 @@ create policy workout_exercises_select on public.workout_exercises
     or exists (
       select 1
       from public.workouts workout
-      join public.exercises exercise on exercise.id = workout_exercises.exercise_id
       where workout.id = workout_exercises.workout_id
         and workout.published
-        and exercise.published
     )
   );
 

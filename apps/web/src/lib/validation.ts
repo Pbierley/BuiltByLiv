@@ -67,6 +67,11 @@ export const exerciseUpdateSchema = exerciseDraftSchema.extend({
   published: z.boolean(),
 });
 
+export const exerciseCreateSchema = exerciseDraftSchema.extend({
+  workoutId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  published: z.boolean(),
+});
+
 export const sessionSetSchema = z.object({
   exerciseId: id,
   index: z.number().int().min(0).max(39),

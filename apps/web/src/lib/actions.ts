@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { toKilograms } from "@/lib/units";
 import {
+  exerciseCreateSchema,
   exerciseUpdateSchema,
   messageSchema,
   passwordError,
@@ -383,6 +384,63 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
   return { ok: true, workoutId, exerciseIds };
 }
 
+export async function addExercise(
+  input: unknown,
+): Promise<ActionResult & { exerciseId?: string }> {
+  const parsed = exerciseCreateSchema.safeParse(input);
+  if (!parsed.success) return { error: "Check the exercise details." };
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can add exercises." };
+
+  const supabase = await createSupabase();
+  const { data: workout } = await supabase
+    .from("workouts")
+    .select("id")
+    .eq("id", parsed.data.workoutId)
+    .maybeSingle();
+  if (!workout) return { error: "That workout was not found." };
+
+  const { data: last } = await supabase
+    .from("workout_exercises")
+    .select("position")
+    .eq("workout_id", workout.id)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const exerciseId = newId(parsed.data.name, "exercise");
+  const { error: exerciseError } = await supabase.from("exercises").insert({
+    id: exerciseId,
+    name: parsed.data.name,
+    coaching: parsed.data.coaching,
+    published: parsed.data.published,
+  });
+  if (exerciseError) return { error: "The exercise could not be created." };
+
+  const { error: linkError } = await supabase.from("workout_exercises").insert({
+    id: exerciseId,
+    workout_id: workout.id,
+    exercise_id: exerciseId,
+    position: (last?.position ?? -1) + 1,
+    cue: parsed.data.cue || null,
+    tracking_type: parsed.data.trackingType,
+    sets: parsed.data.sets,
+    target_reps: parsed.data.trackingType === "duration" ? null : parsed.data.targetReps ?? 8,
+    target_duration_seconds:
+      parsed.data.trackingType === "duration" ? parsed.data.targetDurationSeconds ?? 45 : null,
+    rest_seconds: parsed.data.restSeconds,
+  });
+  if (linkError) {
+    await supabase.from("exercises").delete().eq("id", exerciseId);
+    return { error: "The exercise could not be added to the workout." };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/app/programs");
+  revalidatePath(`/app/workouts/${workout.id}`);
+  return { ok: true, exerciseId };
+}
+
 export async function updateExercise(input: unknown): Promise<ActionResult> {
   const parsed = exerciseUpdateSchema.safeParse(input);
   if (!parsed.success) return { error: "Check the exercise details." };
@@ -400,6 +458,11 @@ export async function updateExercise(input: unknown): Promise<ActionResult> {
     .eq("id", parsed.data.exerciseId);
   if (exerciseError) return { error: "The exercise could not be saved." };
 
+  const { data: link } = await supabase
+    .from("workout_exercises")
+    .select("workout_id")
+    .eq("id", parsed.data.exerciseId)
+    .maybeSingle();
   const { error: linkError } = await supabase
     .from("workout_exercises")
     .update({
@@ -415,6 +478,7 @@ export async function updateExercise(input: unknown): Promise<ActionResult> {
   if (linkError) return { error: "The prescription could not be saved." };
   revalidatePath("/admin");
   revalidatePath("/app/programs");
+  if (link?.workout_id) revalidatePath(`/app/workouts/${link.workout_id}`);
   return { ok: true };
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,12 @@ import {
   type VideoClip,
 } from "@/components/workout-composer";
 import { trackingLabel, type TrackingType, type Workout } from "@/lib/content";
-import { createWorkout, updateExercise, uploadExerciseVideo } from "@/lib/actions";
+import {
+  addExercise,
+  createWorkout,
+  updateExercise,
+  uploadExerciseVideo,
+} from "@/lib/actions";
 import { cn } from "cn";
 
 const trackingTypes: TrackingType[] = ["weight_reps", "reps", "duration"];
@@ -39,15 +44,47 @@ export function AdminEditor({
   const workout =
     programWorkouts.find((item) => item.id === workoutId) ?? programWorkouts[0];
   const [exerciseId, setExerciseId] = useState(workout?.exercises[0]?.id ?? "");
+  const [addingExercise, setAddingExercise] = useState(false);
+  const [pendingExerciseId, setPendingExerciseId] = useState<string | null>(null);
+  const [draftVideo, setDraftVideo] = useState<VideoClip | null>(null);
   const exercise =
     workout?.exercises.find((item) => item.id === exerciseId) ??
     workout?.exercises[0];
+  const editing = addingExercise ? undefined : exercise;
   const [trackingType, setTrackingType] = useState<TrackingType>(
     exercise?.trackingType ?? "weight_reps",
   );
-  const [published, setPublished] = useState(true);
+  const [published, setPublished] = useState(exercise?.published ?? true);
   const [saved, setSaved] = useState(false);
-  const clip = exercise ? videos[exercise.id] : undefined;
+  const clip = editing ? videos[editing.id] : draftVideo;
+
+  function clearDraftVideo() {
+    setDraftVideo((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }
+
+  function startNewExercise() {
+    clearDraftVideo();
+    setPendingExerciseId(null);
+    setAddingExercise(true);
+    setTrackingType("weight_reps");
+    setPublished(true);
+    setSaved(false);
+    setError("");
+  }
+
+  useEffect(() => {
+    if (!pendingExerciseId) return;
+    const found = workouts.some((item) =>
+      item.exercises.some((entry) => entry.id === pendingExerciseId),
+    );
+    if (!found) return;
+    setExerciseId(pendingExerciseId);
+    setAddingExercise(false);
+    setPendingExerciseId(null);
+  }, [pendingExerciseId, workouts]);
 
   function chooseProgram(nextProgramId: string) {
     const nextWorkouts = library.filter(
@@ -55,11 +92,20 @@ export function AdminEditor({
     );
     setProgramId(nextProgramId);
     setCreating(false);
-    const nextExercise = nextWorkouts[0]?.exercises[0];
-    if (!nextWorkouts[0] || !nextExercise) return;
-    setWorkoutId(nextWorkouts[0].id);
+    setAddingExercise(false);
+    setPendingExerciseId(null);
+    clearDraftVideo();
+    const nextWorkout = nextWorkouts[0];
+    const nextExercise = nextWorkout?.exercises[0];
+    if (!nextWorkout) return;
+    setWorkoutId(nextWorkout.id);
+    if (!nextExercise) {
+      startNewExercise();
+      return;
+    }
     setExerciseId(nextExercise.id);
     setTrackingType(nextExercise.trackingType);
+    setPublished(nextExercise.published ?? true);
     setSaved(false);
   }
 
@@ -67,25 +113,44 @@ export function AdminEditor({
     const next = library.find((item) => item.id === nextWorkoutId);
     if (!next) return;
     setCreating(false);
+    setAddingExercise(false);
+    setPendingExerciseId(null);
+    clearDraftVideo();
     setWorkoutId(next.id);
     const nextExercise = next.exercises[0];
-    if (!nextExercise) return;
+    if (!nextExercise) {
+      startNewExercise();
+      return;
+    }
     setExerciseId(nextExercise.id);
     setTrackingType(nextExercise.trackingType);
+    setPublished(nextExercise.published ?? true);
     setSaved(false);
   }
 
   function chooseExercise(nextExerciseId: string) {
     const next = workout?.exercises.find((item) => item.id === nextExerciseId);
     if (!next) return;
+    setAddingExercise(false);
+    setPendingExerciseId(null);
+    clearDraftVideo();
     setExerciseId(next.id);
     setTrackingType(next.trackingType);
+    setPublished(next.published ?? true);
     setSaved(false);
   }
 
   function attachVideo(file: File | null) {
-    if (!exercise) return;
-    const exerciseId = exercise.id;
+    if (!editing) {
+      setDraftVideo((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        if (!file) return null;
+        return { name: file.name, url: URL.createObjectURL(file), file };
+      });
+      setSaved(false);
+      return;
+    }
+    const exerciseId = editing.id;
     setVideos((current) => {
       const previous = current[exerciseId];
       if (previous?.url) URL.revokeObjectURL(previous.url);
@@ -208,36 +273,62 @@ export function AdminEditor({
             router.refresh();
           }}
         />
-      ) : workout && exercise ? (
+      ) : workout ? (
       <form
         className="grid min-w-0 gap-5 border border-border bg-card p-4 sm:p-5"
         onSubmit={async (event) => {
           event.preventDefault();
-          if (!exercise) return;
           const form = new FormData(event.currentTarget);
-          const result = await updateExercise({
-            exerciseId: exercise.id,
+          const details = {
             name: form.get("name"),
             coaching: form.get("coaching"),
             cue: String(form.get("cue") ?? ""),
             trackingType,
             sets: Number(form.get("sets")),
-            targetReps: Number(form.get("reps") || exercise.targetReps || 8),
+            targetReps: Number(form.get("reps") || editing?.targetReps || 8),
             targetDurationSeconds: Number(
-              form.get("duration") || exercise.targetDurationSeconds || 45,
+              form.get("duration") || editing?.targetDurationSeconds || 45,
             ),
             restSeconds: Number(form.get("rest")),
             published,
+          };
+          if (editing) {
+            const result = await updateExercise({
+              exerciseId: editing.id,
+              ...details,
+            });
+            setError(result.error ?? "");
+            setSaved(!result.error);
+            if (!result.error) router.refresh();
+            return;
+          }
+          const result = await addExercise({
+            workoutId: workout.id,
+            ...details,
           });
-          setError(result.error ?? "");
-          setSaved(!result.error);
-          if (!result.error) router.refresh();
+          if (result.error || !result.exerciseId) {
+            setError(result.error ?? "The exercise could not be created.");
+            setSaved(false);
+            return;
+          }
+          if (draftVideo?.file) {
+            const body = new FormData();
+            body.set("file", draftVideo.file);
+            const uploaded = await uploadExerciseVideo(result.exerciseId, body);
+            setError(uploaded.error ?? "");
+          } else {
+            setError("");
+          }
+          clearDraftVideo();
+          setPendingExerciseId(result.exerciseId);
+          setSaved(true);
+          router.refresh();
         }}
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-3xl tracking-tight">
-              {exercise.name}
+              {editing ? editing.name : "New exercise"}
             </h2>
             <p className="text-sm text-muted-foreground">{workout.title}</p>
           </div>
@@ -254,7 +345,7 @@ export function AdminEditor({
               onClick={() => chooseExercise(item.id)}
               className={cn(
                 "border px-3 py-1.5 text-sm",
-                item.id === exercise.id
+                editing?.id === item.id
                   ? "border-primary bg-primary text-primary-foreground"
                   : "border-border",
               )}
@@ -262,6 +353,18 @@ export function AdminEditor({
               {item.name}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={startNewExercise}
+            className={cn(
+              "border px-3 py-1.5 text-sm",
+              editing
+                ? "border-border"
+                : "border-primary bg-primary text-primary-foreground",
+            )}
+          >
+            New exercise
+          </button>
         </div>
 
         <Field label="Exercise name" htmlFor="exercise-name">
@@ -269,8 +372,9 @@ export function AdminEditor({
             id="exercise-name"
             className="h-11"
             name="name"
-            defaultValue={exercise.name}
-            key={`name-${exercise.id}`}
+            defaultValue={editing?.name ?? ""}
+            key={`name-${editing?.id ?? "new"}`}
+            required
           />
         </Field>
         <Field label="Coaching notes" htmlFor="exercise-notes">
@@ -278,8 +382,8 @@ export function AdminEditor({
             id="exercise-notes"
             rows={4}
             name="coaching"
-            defaultValue={exercise.coaching}
-            key={`notes-${exercise.id}`}
+            defaultValue={editing?.coaching ?? ""}
+            key={`notes-${editing?.id ?? "new"}`}
           />
         </Field>
         <Field label="Note for this workout" htmlFor="exercise-cue">
@@ -288,8 +392,8 @@ export function AdminEditor({
             className="h-11"
             placeholder="Optional, such as slow eccentric"
             name="cue"
-            defaultValue={exercise.cue ?? ""}
-            key={`cue-${exercise.id}`}
+            defaultValue={editing?.cue ?? ""}
+            key={`cue-${editing?.id ?? "new"}`}
           />
         </Field>
 
@@ -325,8 +429,8 @@ export function AdminEditor({
               className="h-11"
               inputMode="numeric"
               name="sets"
-              defaultValue={exercise.sets}
-              key={`sets-${exercise.id}`}
+              defaultValue={editing?.sets ?? 3}
+              key={`sets-${editing?.id ?? "new"}`}
             />
           </Field>
           {trackingType === "duration" ? (
@@ -336,8 +440,8 @@ export function AdminEditor({
                 className="h-11"
                 inputMode="numeric"
                 name="duration"
-                defaultValue={exercise.targetDurationSeconds ?? 45}
-                key={`duration-${exercise.id}`}
+                defaultValue={editing?.targetDurationSeconds ?? 45}
+                key={`duration-${editing?.id ?? "new"}`}
               />
             </Field>
           ) : (
@@ -347,8 +451,8 @@ export function AdminEditor({
                 className="h-11"
                 inputMode="numeric"
                 name="reps"
-                defaultValue={exercise.targetReps ?? 8}
-                key={`reps-${exercise.id}`}
+                defaultValue={editing?.targetReps ?? 8}
+                key={`reps-${editing?.id ?? "new"}`}
               />
             </Field>
           )}
@@ -358,8 +462,8 @@ export function AdminEditor({
               className="h-11"
               inputMode="numeric"
               name="rest"
-              defaultValue={exercise.restSeconds}
-              key={`rest-${exercise.id}`}
+              defaultValue={editing?.restSeconds ?? 90}
+              key={`rest-${editing?.id ?? "new"}`}
             />
           </Field>
         </div>
@@ -367,8 +471,10 @@ export function AdminEditor({
         <div className="grid gap-2">
           <p className="text-sm font-medium">Demo video</p>
           <VideoUpload
-            fileName={clip?.name ?? `${exercise.id}-demo.mp4`}
-            previewUrl={clip?.url ?? ""}
+            fileName={clip?.name ?? (editing?.hasVideo ? "Current demo" : "")}
+            previewUrl={
+              clip?.url ?? (editing?.hasVideo ? `/api/videos/${editing.id}` : "")
+            }
             onFile={attachVideo}
           />
         </div>
@@ -385,7 +491,7 @@ export function AdminEditor({
             {published ? "Unpublish" : "Publish"}
           </Button>
           <Button type="submit" className="h-11">
-            Save exercise
+            {editing ? "Save exercise" : "Create exercise"}
           </Button>
           <Button variant="ghost" asChild>
             <Link href={`/app/workouts/${workout.id}`}>Preview member view</Link>

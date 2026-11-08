@@ -293,6 +293,7 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
         restSeconds: link.rest_seconds,
         logged: sets,
         hasVideo: Boolean(exercise?.video_path),
+        published: exercise?.published ?? true,
       } satisfies Exercise;
     }),
   };
