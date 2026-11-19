@@ -140,7 +140,7 @@ export async function listWorkouts(programId?: string): Promise<Workout[]> {
     ({ data, error } = await load(workoutSelectWithoutPhases));
   }
   if (error) throw error;
-  return ((data ?? []) as WorkoutRow[]).map((row) => toWorkout(row, []));
+  return ((data ?? []) as unknown as WorkoutRow[]).map((row) => toWorkout(row, []));
 }
 
 export async function getWorkoutForViewer(workoutId: string, viewer: Viewer) {
