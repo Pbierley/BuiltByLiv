@@ -57,8 +57,8 @@ type WorkoutRow = {
   summary: string;
   published: boolean;
   position: number;
-  phase_id: string | null;
-  phases: PhaseEmbed | PhaseEmbed[] | null;
+  phase_id?: string | null;
+  phases?: PhaseEmbed | PhaseEmbed[] | null;
   workout_exercises: LinkRow[];
 };
 
@@ -130,23 +130,33 @@ export async function listPrograms(): Promise<Program[]> {
 
 export async function listWorkouts(programId?: string): Promise<Workout[]> {
   const supabase = await createSupabase();
-  let query = supabase
-    .from("workouts")
-    .select(workoutSelect)
-    .order("position");
-  if (programId) query = query.eq("program_id", programId);
-  const { data, error } = await query;
+  const load = (columns: string) => {
+    let query = supabase.from("workouts").select(columns).order("position");
+    if (programId) query = query.eq("program_id", programId);
+    return query;
+  };
+  let { data, error } = await load(workoutSelect);
+  if (error && phaseSchemaMissing(error)) {
+    ({ data, error } = await load(workoutSelectWithoutPhases));
+  }
   if (error) throw error;
   return ((data ?? []) as WorkoutRow[]).map((row) => toWorkout(row, []));
 }
 
 export async function getWorkoutForViewer(workoutId: string, viewer: Viewer) {
   const supabase = await createSupabase();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("workouts")
     .select(workoutSelect)
     .eq("id", workoutId)
     .maybeSingle();
+  if (error && phaseSchemaMissing(error)) {
+    ({ data, error } = await supabase
+      .from("workouts")
+      .select(workoutSelectWithoutPhases)
+      .eq("id", workoutId)
+      .maybeSingle());
+  }
   if (error) throw error;
   if (!data) return null;
 
@@ -336,8 +346,12 @@ export async function openWorkoutId(viewer: Viewer) {
 
 export { ConfigError };
 
-const workoutSelect =
-  "id, program_id, title, summary, published, position, phase_id, phases(id, title, position, starts_week, ends_week), workout_exercises(id, position, cue, tracking_type, sets, target_reps, target_reps_label, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published))";
+const workoutExercisesSelect =
+  "workout_exercises(id, position, cue, tracking_type, sets, target_reps, target_reps_label, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published))";
+
+const workoutSelect = `id, program_id, title, summary, published, position, phase_id, phases(id, title, position, starts_week, ends_week), ${workoutExercisesSelect}`;
+
+const workoutSelectWithoutPhases = `id, program_id, title, summary, published, position, ${workoutExercisesSelect}`;
 
 export async function listPhases(programId?: string): Promise<Phase[]> {
   const supabase = await createSupabase();
@@ -347,7 +361,10 @@ export async function listPhases(programId?: string): Promise<Phase[]> {
     .order("position");
   if (programId) query = query.eq("program_id", programId);
   const { data, error } = await query;
-  if (error) throw error;
+  if (error) {
+    if (relationMissing(error)) return [];
+    throw error;
+  }
   return (data ?? []).map((phase) => ({
     id: phase.id,
     programId: phase.program_id,
@@ -396,6 +413,10 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
 
 function relationMissing(error: { code?: string }) {
   return error.code === "42P01" || error.code === "PGRST205";
+}
+
+function phaseSchemaMissing(error: { code?: string }) {
+  return relationMissing(error) || error.code === "42703" || error.code === "PGRST200";
 }
 
 function first<T>(value: T | T[] | null | undefined): T | null {
