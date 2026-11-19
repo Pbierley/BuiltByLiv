@@ -3,7 +3,8 @@ import "server-only";
 import { formatCalendarDate } from "@/lib/dates";
 import { fromKilograms } from "@/lib/units";
 import { ConfigError, createSupabase } from "@/lib/supabase/server";
-import type { Exercise, LoggedSet, Program, TrackingType, Workout } from "@/lib/content";
+import type { Exercise, LoggedSet, Phase, Program, TrackingType, Workout } from "@/lib/content";
+import { programProgress } from "@/lib/phases";
 
 export type Viewer = {
   id: string;
@@ -15,6 +16,9 @@ export type Viewer = {
   status: "trialing" | "active" | "grace" | "expired";
   trialDaysLeft: number;
   statusLabel: string;
+  startedAt: string | null;
+  programWeek: number;
+  currentPhase: number;
 };
 
 type ExerciseRow = {
@@ -32,9 +36,18 @@ type LinkRow = {
   tracking_type: TrackingType;
   sets: number;
   target_reps: number | null;
+  target_reps_label: string | null;
   target_duration_seconds: number | null;
   rest_seconds: number;
   exercises: ExerciseRow | ExerciseRow[];
+};
+
+type PhaseEmbed = {
+  id: string;
+  title: string;
+  position: number;
+  starts_week: number;
+  ends_week: number;
 };
 
 type WorkoutRow = {
@@ -44,6 +57,8 @@ type WorkoutRow = {
   summary: string;
   published: boolean;
   position: number;
+  phase_id: string | null;
+  phases: PhaseEmbed | PhaseEmbed[] | null;
   workout_exercises: LinkRow[];
 };
 
@@ -56,7 +71,7 @@ export async function getViewer(): Promise<Viewer | null> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, email, display_name, unit, role, coaching_acknowledged_at")
+    .select("id, email, display_name, unit, role, coaching_acknowledged_at, created_at")
     .eq("id", user.id)
     .maybeSingle();
   if (!profile) return null;
@@ -77,6 +92,7 @@ export async function getViewer(): Promise<Viewer | null> {
         : status === "grace"
           ? "Payment due"
           : "Membership ended";
+  const progress = programProgress(profile.created_at);
 
   return {
     id: profile.id,
@@ -88,6 +104,9 @@ export async function getViewer(): Promise<Viewer | null> {
     status,
     trialDaysLeft,
     statusLabel,
+    startedAt: profile.created_at ?? null,
+    programWeek: progress.week,
+    currentPhase: progress.phase,
   };
 }
 
@@ -252,6 +271,56 @@ export async function listOwnMessages(viewer: Viewer) {
   }));
 }
 
+export type PaymentSettings = {
+  username: string | null;
+  qrUrl: string | null;
+};
+
+const qrPathPattern = /^[0-9a-f-]{36}\.(png|jpe?g|webp)$/;
+
+export async function getPaymentSettings(): Promise<PaymentSettings> {
+  const supabase = await createSupabase();
+  const { data, error } = await supabase
+    .from("payment_settings")
+    .select("venmo_username, qr_path")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) {
+    if (relationMissing(error)) return { username: null, qrUrl: null };
+    throw error;
+  }
+  const username = data?.venmo_username?.trim() || null;
+  const qrPath = data?.qr_path && qrPathPattern.test(data.qr_path) ? data.qr_path : null;
+  const qrUrl = qrPath
+    ? supabase.storage.from("payment-qr").getPublicUrl(qrPath).data.publicUrl
+    : null;
+  return { username, qrUrl };
+}
+
+export type InviteRecord = {
+  email: string;
+  invitedAt: string;
+  status: "invited" | "already_had_account";
+};
+
+export async function listInvites(): Promise<InviteRecord[]> {
+  const supabase = await createSupabase();
+  const { data, error } = await supabase
+    .from("invites")
+    .select("email, invited_at, status")
+    .order("invited_at", { ascending: false })
+    .limit(50);
+  if (error) {
+    if (relationMissing(error)) return [];
+    throw error;
+  }
+  return (data ?? []).map((invite) => ({
+    email: invite.email,
+    invitedAt: formatCalendarDate(invite.invited_at),
+    status: invite.status === "already_had_account" ? "already_had_account" : "invited",
+  }));
+}
+
 export async function openWorkoutId(viewer: Viewer) {
   const supabase = await createSupabase();
   const { data } = await supabase
@@ -268,16 +337,41 @@ export async function openWorkoutId(viewer: Viewer) {
 export { ConfigError };
 
 const workoutSelect =
-  "id, program_id, title, summary, published, position, workout_exercises(id, position, cue, tracking_type, sets, target_reps, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published))";
+  "id, program_id, title, summary, published, position, phase_id, phases(id, title, position, starts_week, ends_week), workout_exercises(id, position, cue, tracking_type, sets, target_reps, target_reps_label, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published))";
+
+export async function listPhases(programId?: string): Promise<Phase[]> {
+  const supabase = await createSupabase();
+  let query = supabase
+    .from("phases")
+    .select("id, program_id, title, summary, position, starts_week, ends_week")
+    .order("position");
+  if (programId) query = query.eq("program_id", programId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []).map((phase) => ({
+    id: phase.id,
+    programId: phase.program_id,
+    title: phase.title,
+    summary: phase.summary,
+    position: phase.position,
+    startsWeek: phase.starts_week,
+    endsWeek: phase.ends_week,
+  }));
+}
 
 function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
   const byExercise = new Map(logged);
   const links = [...(row.workout_exercises ?? [])].sort((a, b) => a.position - b.position);
+  const phase = first(row.phases);
   return {
     id: row.id,
     programId: row.program_id,
     title: row.title,
     summary: row.summary,
+    phaseId: row.phase_id,
+    phaseTitle: phase?.title ?? null,
+    phasePosition: phase?.position ?? null,
+    phaseStartsWeek: phase?.starts_week ?? null,
     exercises: links.map((link) => {
       const exercise = first(link.exercises);
       const sets = (byExercise.get(link.id) ?? []).filter(Boolean);
@@ -289,6 +383,7 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
         trackingType: link.tracking_type,
         sets: link.sets,
         targetReps: link.target_reps ?? undefined,
+        targetRepsLabel: link.target_reps_label?.trim() || undefined,
         targetDurationSeconds: link.target_duration_seconds ?? undefined,
         restSeconds: link.rest_seconds,
         logged: sets,
@@ -297,6 +392,10 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
       } satisfies Exercise;
     }),
   };
+}
+
+function relationMissing(error: { code?: string }) {
+  return error.code === "42P01" || error.code === "PGRST205";
 }
 
 function first<T>(value: T | T[] | null | undefined): T | null {

@@ -2,7 +2,16 @@ import { Suspense } from "react";
 import { AdminStudio } from "@/components/admin-studio";
 import { PageFallback } from "@/components/page-fallback";
 import { SetupNeeded } from "@/components/setup-needed";
-import { ConfigError, getViewer, listPrograms, listThreads, listWorkouts } from "@/lib/queries";
+import {
+  ConfigError,
+  getPaymentSettings,
+  getViewer,
+  listInvites,
+  listPhases,
+  listPrograms,
+  listThreads,
+  listWorkouts,
+} from "@/lib/queries";
 
 export const metadata = { title: "Admin" };
 
@@ -23,10 +32,23 @@ async function AdminFrame() {
     throw error;
   }
   if (!viewer) return null;
-  const [programs, workouts, threads] = await Promise.all([
+  const [programs, workouts, threads, phases, payment, invites] = await Promise.all([
     listPrograms(),
     listWorkouts(),
     listThreads(viewer.id),
+    listPhases(),
+    getPaymentSettings(),
+    listInvites(),
   ]);
-  return <AdminStudio programs={programs} workouts={workouts} threads={threads} />;
+  return (
+    <AdminStudio
+      programs={programs}
+      workouts={workouts}
+      threads={threads}
+      phases={phases}
+      username={payment.username}
+      qrUrl={payment.qrUrl}
+      invites={invites}
+    />
+  );
 }

@@ -13,6 +13,15 @@ export const membership = {
   trialDays: 7,
 };
 
+export const venmo = {
+  username: "Alivia-Bierley",
+  url: "https://venmo.com/u/Alivia-Bierley",
+};
+
+export function venmoNote(email: string) {
+  return `Built By Liv (${email})`;
+}
+
 export type TrackingType = "weight_reps" | "reps" | "duration";
 
 export type LoggedSet = {
@@ -30,11 +39,22 @@ export type Exercise = {
   trackingType: TrackingType;
   sets: number;
   targetReps?: number;
+  targetRepsLabel?: string;
   targetDurationSeconds?: number;
   restSeconds: number;
   logged: LoggedSet[];
   hasVideo?: boolean;
   published?: boolean;
+};
+
+export type Phase = {
+  id: string;
+  programId: string;
+  title: string;
+  summary: string;
+  position: number;
+  startsWeek: number;
+  endsWeek: number;
 };
 
 export type Workout = {
@@ -43,6 +63,10 @@ export type Workout = {
   title: string;
   summary: string;
   exercises: Exercise[];
+  phaseId?: string | null;
+  phaseTitle?: string | null;
+  phasePosition?: number | null;
+  phaseStartsWeek?: number | null;
 };
 
 export type Program = {
@@ -354,9 +378,44 @@ export function trackingLabel(type: TrackingType) {
   return "Time";
 }
 
+export const REP_LABEL_MAX = 80;
+
 export function prescriptionLabel(exercise: Exercise) {
   if (exercise.trackingType === "duration") {
     return `${exercise.sets} × ${formatDuration(exercise.targetDurationSeconds ?? 0)}`;
   }
-  return `${exercise.sets} × ${exercise.targetReps}`;
+  const reps = exercise.targetRepsLabel?.trim() || exercise.targetReps;
+  return `${exercise.sets} × ${reps}`;
+}
+
+export function normalizeRepTarget(
+  text: string,
+  fallbackReps?: number,
+):
+  | { error: string }
+  | { targetReps?: number; targetRepsLabel?: string } {
+  const label = text.trim();
+  if (label.length > REP_LABEL_MAX) {
+    return { error: "Keep the rep target to 80 characters." };
+  }
+  if (!label) {
+    return fallbackReps == null ? {} : { targetReps: fallbackReps };
+  }
+  if (/^\d+$/.test(label)) {
+    const reps = Number(label);
+    if (!Number.isSafeInteger(reps) || reps < 1 || reps > 500) {
+      return { error: "Use 1 to 500 reps, or a short range such as 6-12." };
+    }
+    return { targetReps: reps };
+  }
+  const leading = /^(\d+)/.exec(label);
+  const leadingReps = leading ? Number(leading[1]) : undefined;
+  const targetReps =
+    leadingReps != null &&
+    Number.isSafeInteger(leadingReps) &&
+    leadingReps >= 1 &&
+    leadingReps <= 500
+      ? leadingReps
+      : fallbackReps;
+  return { targetReps, targetRepsLabel: label };
 }

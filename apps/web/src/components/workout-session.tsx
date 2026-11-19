@@ -112,6 +112,14 @@ export function WorkoutSession({
           {workout.title}
         </h1>
         <p className="mt-2 max-w-xl text-muted-foreground">{workout.summary}</p>
+        {workout.phaseTitle ? (
+          <p className="mt-2 text-sm text-primary">
+            {workout.phaseTitle}
+            {workout.phaseStartsWeek
+              ? ` · Weeks ${workout.phaseStartsWeek}–${workout.phaseStartsWeek + 2}`
+              : ""}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">

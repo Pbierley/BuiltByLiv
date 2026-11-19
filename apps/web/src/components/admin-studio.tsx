@@ -4,19 +4,32 @@ import { useState } from "react";
 import Link from "next/link";
 import { cn } from "cn";
 import { AdminEditor } from "@/components/admin-editor";
+import { AdminInvites } from "@/components/admin-invites";
 import { ClientMessages, type Thread } from "@/components/client-messages";
-import type { Workout } from "@/lib/content";
+import type { Phase, Workout } from "@/lib/content";
 
-type Section = "workouts" | "clients";
+type Section = "workouts" | "clients" | "invites";
 
 export function AdminStudio({
   programs,
   workouts,
   threads,
+  phases,
+  username,
+  qrUrl,
+  invites,
 }: {
   programs: { id: string; title: string }[];
   workouts: Workout[];
   threads: Thread[];
+  phases: Phase[];
+  username: string | null;
+  qrUrl: string | null;
+  invites: {
+    email: string;
+    invitedAt: string;
+    status: "invited" | "already_had_account";
+  }[];
 }) {
   const [section, setSection] = useState<Section>("workouts");
   const [waiting, setWaiting] = useState(
@@ -46,6 +59,12 @@ export function AdminStudio({
             >
               Clients{waiting > 0 ? ` (${waiting})` : ""}
             </Tab>
+            <Tab
+              pressed={section === "invites"}
+              onClick={() => setSection("invites")}
+            >
+              Invites
+            </Tab>
           </div>
           <Link
             href="/"
@@ -61,10 +80,14 @@ export function AdminStudio({
             key={workouts.map((workout) => workout.id).join()}
             programs={programs}
             workouts={workouts}
+            phases={phases}
           />
         </div>
         <div className={section === "clients" ? undefined : "hidden"}>
           <ClientMessages threads={threads} onWaitingChange={setWaiting} />
+        </div>
+        <div className={section === "invites" ? undefined : "hidden"}>
+          <AdminInvites username={username} qrUrl={qrUrl} invites={invites} />
         </div>
       </div>
     </div>

@@ -14,6 +14,9 @@ export function SiteFooter() {
           </p>
         </div>
         <nav className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+          <Link href="/pay" className="hover:text-primary">
+            Pay with Venmo
+          </Link>
           <Link href="/privacy" className="hover:text-primary">
             Privacy
           </Link>

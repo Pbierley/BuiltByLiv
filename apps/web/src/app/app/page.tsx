@@ -1,20 +1,26 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { getViewer, listWeighIns, listWorkouts, openWorkoutId } from "@/lib/queries";
+import { PhaseWorkoutList } from "@/components/phase-workout-list";
+import { memberLocked } from "@/lib/phases";
+import { getViewer, listPhases, listWeighIns, listWorkouts, openWorkoutId } from "@/lib/queries";
 
 export const metadata = { title: "Home" };
 
 export default async function MemberHomePage() {
   const viewer = await getViewer();
   if (!viewer) return null;
-  const [workouts, weighIns, continueId] = await Promise.all([
+  const [workouts, phases, weighIns, continueId] = await Promise.all([
     listWorkouts("strength-foundations"),
+    listPhases("strength-foundations"),
     listWeighIns(viewer),
     openWorkoutId(viewer),
   ]);
   const latest = weighIns[0];
+  const openWorkouts = workouts.filter(
+    (workout) => !memberLocked(workout.phasePosition, viewer),
+  );
   const continueWorkout =
-    workouts.find((workout) => workout.id === continueId) ?? workouts[0];
+    openWorkouts.find((workout) => workout.id === continueId) ?? openWorkouts[0];
 
   return (
     <div className="grid gap-8">
@@ -25,6 +31,10 @@ export default async function MemberHomePage() {
         <h1 className="mt-2 font-display text-4xl tracking-tight sm:text-5xl">
           Welcome back, {viewer.name.split(" ")[0]}
         </h1>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Week {viewer.programWeek}
+          {viewer.programWeek <= 12 ? " of 12" : ""} · Phase {viewer.currentPhase}
+        </p>
       </div>
 
       <section className="grid gap-4 lg:grid-cols-5">
@@ -73,26 +83,12 @@ export default async function MemberHomePage() {
             View all
           </Link>
         </div>
-        <ul className="divide-y divide-border border border-border bg-card">
-          {workouts.map((workout) => (
-            <li key={workout.id}>
-              <Link
-                href={`/app/workouts/${workout.id}`}
-                className="flex flex-col gap-1 px-4 py-4 hover:bg-secondary/60 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-              >
-                <span className="min-w-0">
-                  <span className="block font-medium">{workout.title}</span>
-                  <span className="block text-sm text-muted-foreground">
-                    {workout.summary}
-                  </span>
-                </span>
-                <span className="shrink-0 text-sm text-muted-foreground">
-                  {workout.exercises.length} exercises
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <PhaseWorkoutList
+          workouts={workouts}
+          phases={phases}
+          currentPhase={viewer.currentPhase}
+          role={viewer.role}
+        />
       </section>
     </div>
   );

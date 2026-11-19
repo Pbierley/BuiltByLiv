@@ -7,8 +7,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/field";
 import { VideoUpload } from "@/components/video-upload";
 import {
+  normalizeRepTarget,
   trackingLabel,
   type Exercise,
+  type Phase,
   type TrackingType,
   type Workout,
 } from "@/lib/content";
@@ -23,7 +25,7 @@ type DraftExercise = {
   cue: string;
   trackingType: TrackingType;
   sets: string;
-  targetReps: string;
+  repsLabel: string;
   targetDuration: string;
   restSeconds: string;
   videoName: string;
@@ -35,16 +37,20 @@ const trackingTypes: TrackingType[] = ["weight_reps", "reps", "duration"];
 
 export function WorkoutComposer({
   programs,
+  phases,
   onCancel,
   onCreate,
 }: {
   programs: { id: string; title: string }[];
+  phases: Phase[];
   onCancel: () => void;
   onCreate: (workout: Workout, videos: Record<string, VideoClip>) => void | Promise<void>;
 }) {
   const nextKey = useRef(1);
   const serial = useRef(0);
   const [programId, setProgramId] = useState(programs[0]?.id ?? "");
+  const [phaseId, setPhaseId] = useState<string | null>(null);
+  const programPhases = phases.filter((phase) => phase.programId === programId);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [exercises, setExercises] = useState<DraftExercise[]>([
@@ -94,7 +100,8 @@ export function WorkoutComposer({
 
         serial.current += 1;
         const videos: Record<string, VideoClip> = {};
-        const built: Exercise[] = exercises.map((exercise, index) => {
+        const built: Exercise[] = [];
+        for (const [index, exercise] of exercises.entries()) {
           const id = `custom-${serial.current}-ex-${index + 1}`;
           if (exercise.videoFile) {
             videos[id] = {
@@ -104,25 +111,34 @@ export function WorkoutComposer({
             };
           }
           const sets = numberOr(exercise.sets, 3);
-          return {
+          let targetReps: number | undefined;
+          let targetRepsLabel: string | undefined;
+          if (exercise.trackingType !== "duration") {
+            const reps = normalizeRepTarget(exercise.repsLabel);
+            if ("error" in reps) {
+              setError(reps.error);
+              return;
+            }
+            targetReps = reps.targetReps;
+            targetRepsLabel = reps.targetRepsLabel;
+          }
+          built.push({
             id,
             name: exercise.name.trim(),
             coaching: exercise.coaching.trim(),
             cue: exercise.cue.trim() || undefined,
             trackingType: exercise.trackingType,
             sets,
-            targetReps:
-              exercise.trackingType === "duration"
-                ? undefined
-                : numberOr(exercise.targetReps, 8),
+            targetReps,
+            targetRepsLabel,
             targetDurationSeconds:
               exercise.trackingType === "duration"
                 ? numberOr(exercise.targetDuration, 45)
                 : undefined,
             restSeconds: numberOr(exercise.restSeconds, 60),
             logged: [],
-          };
-        });
+          });
+        }
 
         onCreate(
           {
@@ -130,6 +146,7 @@ export function WorkoutComposer({
             programId,
             title: workoutTitle,
             summary: summary.trim() || "Added by Liv.",
+            phaseId,
             exercises: built,
           },
           videos,
@@ -153,7 +170,10 @@ export function WorkoutComposer({
               key={program.id}
               type="button"
               aria-pressed={programId === program.id}
-              onClick={() => setProgramId(program.id)}
+              onClick={() => {
+                setProgramId(program.id);
+                setPhaseId(null);
+              }}
               className={cn(
                 "h-11 border px-3 text-sm",
                 programId === program.id
@@ -166,6 +186,43 @@ export function WorkoutComposer({
           ))}
         </div>
       </fieldset>
+
+      {programPhases.length ? (
+        <fieldset className="grid gap-2">
+          <legend className="text-sm font-medium">Phase</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              aria-pressed={phaseId === null}
+              onClick={() => setPhaseId(null)}
+              className={cn(
+                "h-11 border px-3 text-sm",
+                phaseId === null
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border",
+              )}
+            >
+              No phase
+            </button>
+            {programPhases.map((phase) => (
+              <button
+                key={phase.id}
+                type="button"
+                aria-pressed={phaseId === phase.id}
+                onClick={() => setPhaseId(phase.id)}
+                className={cn(
+                  "h-11 border px-3 text-sm",
+                  phaseId === phase.id
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border",
+                )}
+              >
+                {phase.title} · Weeks {phase.startsWeek}–{phase.endsWeek}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
 
       <Field label="Workout name" htmlFor="workout-title">
         <Input
@@ -290,15 +347,19 @@ export function WorkoutComposer({
                   />
                 </Field>
               ) : (
-                <Field label="Target reps" htmlFor={`${exercise.key}-reps`}>
+                <Field
+                  label="Target reps"
+                  htmlFor={`${exercise.key}-reps`}
+                  hint="6-12 or 8-10 each leg"
+                >
                   <Input
                     id={`${exercise.key}-reps`}
                     className="h-11"
-                    inputMode="numeric"
-                    value={exercise.targetReps}
+                    maxLength={80}
+                    value={exercise.repsLabel}
                     onChange={(event) =>
                       updateExercise(exercise.key, {
-                        targetReps: event.target.value,
+                        repsLabel: event.target.value,
                       })
                     }
                   />
@@ -363,7 +424,7 @@ function blankExercise(key: string): DraftExercise {
     cue: "",
     trackingType: "weight_reps",
     sets: "3",
-    targetReps: "8",
+    repsLabel: "8",
     targetDuration: "45",
     restSeconds: "90",
     videoName: "",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REP_LABEL_MAX } from "@/lib/content";
 
 const id = z.string().regex(/^[a-z0-9-]{1,80}$/);
 const trackingType = z.enum(["weight_reps", "reps", "duration"]);
@@ -51,15 +52,24 @@ export const exerciseDraftSchema = z.object({
   trackingType,
   sets: z.number().int().min(1).max(20),
   targetReps: z.number().int().min(1).max(500).optional(),
+  targetRepsLabel: z.string().trim().max(REP_LABEL_MAX).optional(),
   targetDurationSeconds: z.number().int().min(1).max(7200).optional(),
   restSeconds: z.number().int().min(0).max(600),
 });
+
+const phaseId = z.string().regex(/^[a-z0-9-]{1,64}$/);
 
 export const workoutDraftSchema = z.object({
   programId: id,
   title: z.string().trim().min(1).max(80),
   summary: z.string().trim().max(300),
+  phaseId: phaseId.nullable().optional(),
   exercises: z.array(exerciseDraftSchema).min(1).max(20),
+});
+
+export const phaseAssignSchema = z.object({
+  workoutId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  phaseId: phaseId.nullable(),
 });
 
 export const exerciseUpdateSchema = exerciseDraftSchema.extend({
@@ -96,3 +106,24 @@ export const videoIdSchema = id;
 
 export const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"] as const;
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+export const MAX_QR_BYTES = 2 * 1024 * 1024;
+
+const venmoUsernamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$/;
+
+export const inviteEmailSchema = z
+  .string()
+  .trim()
+  .email()
+  .max(320)
+  .transform((value) => value.toLowerCase());
+
+export function parseVenmoUsername(
+  value: string,
+): { username: string | null } | { error: string } {
+  const username = value.trim().replace(/^@+/, "");
+  if (!username) return { username: null };
+  if (!venmoUsernamePattern.test(username)) {
+    return { error: "Enter a Venmo username using letters, numbers, and . _ -." };
+  }
+  return { username };
+}

@@ -13,10 +13,18 @@ import {
   WorkoutComposer,
   type VideoClip,
 } from "@/components/workout-composer";
-import { trackingLabel, type TrackingType, type Workout } from "@/lib/content";
+import {
+  normalizeRepTarget,
+  trackingLabel,
+  type Phase,
+  type TrackingType,
+  type Workout,
+} from "@/lib/content";
 import {
   addExercise,
+  assignWorkoutPhase,
   createWorkout,
+  deleteWorkout,
   updateExercise,
   uploadExerciseVideo,
 } from "@/lib/actions";
@@ -27,9 +35,11 @@ const trackingTypes: TrackingType[] = ["weight_reps", "reps", "duration"];
 export function AdminEditor({
   programs,
   workouts,
+  phases,
 }: {
   programs: { id: string; title: string }[];
   workouts: Workout[];
+  phases: Phase[];
 }) {
   const router = useRouter();
   const library = workouts;
@@ -230,7 +240,10 @@ export function AdminEditor({
                   : "border-border bg-card",
               )}
             >
-              <span>{item.title}</span>
+              <span className="block">{item.title}</span>
+              {item.phaseTitle ? (
+                <span className="block text-xs opacity-70">{item.phaseTitle}</span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -239,12 +252,14 @@ export function AdminEditor({
       {creating ? (
         <WorkoutComposer
           programs={programs}
+          phases={phases}
           onCancel={() => setCreating(false)}
           onCreate={async (created, clips) => {
             const result = await createWorkout({
               programId: created.programId,
               title: created.title,
               summary: created.summary,
+              phaseId: created.phaseId ?? null,
               exercises: created.exercises.map((item) => ({
                 name: item.name,
                 coaching: item.coaching,
@@ -252,6 +267,7 @@ export function AdminEditor({
                 trackingType: item.trackingType,
                 sets: item.sets,
                 targetReps: item.targetReps,
+                targetRepsLabel: item.targetRepsLabel,
                 targetDurationSeconds: item.targetDurationSeconds,
                 restSeconds: item.restSeconds,
               })),
@@ -274,18 +290,52 @@ export function AdminEditor({
           }}
         />
       ) : workout ? (
+      <div className="grid min-w-0 gap-5">
+      <PhaseAssign
+        workout={workout}
+        phases={phases.filter((phase) => phase.programId === workout.programId)}
+      />
+      <DeleteWorkout
+        key={workout.id}
+        title={workout.title}
+        onDelete={async () => {
+          const result = await deleteWorkout(workout.id);
+          if (result.error) return result.error;
+          const remaining = programWorkouts.filter((item) => item.id !== workout.id);
+          setAddingExercise(false);
+          setWorkoutId(remaining[0]?.id ?? "");
+          router.refresh();
+          return null;
+        }}
+      />
       <form
         className="grid min-w-0 gap-5 border border-border bg-card p-4 sm:p-5"
         onSubmit={async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
+          let targetReps: number | undefined;
+          let targetRepsLabel: string | undefined;
+          if (trackingType !== "duration") {
+            const reps = normalizeRepTarget(
+              String(form.get("reps") ?? ""),
+              editing?.targetReps,
+            );
+            if ("error" in reps) {
+              setError(reps.error);
+              setSaved(false);
+              return;
+            }
+            targetReps = reps.targetReps;
+            targetRepsLabel = reps.targetRepsLabel;
+          }
           const details = {
             name: form.get("name"),
             coaching: form.get("coaching"),
             cue: String(form.get("cue") ?? ""),
             trackingType,
             sets: Number(form.get("sets")),
-            targetReps: Number(form.get("reps") || editing?.targetReps || 8),
+            targetReps,
+            targetRepsLabel,
             targetDurationSeconds: Number(
               form.get("duration") || editing?.targetDurationSeconds || 45,
             ),
@@ -445,13 +495,20 @@ export function AdminEditor({
               />
             </Field>
           ) : (
-            <Field label="Target reps" htmlFor="target-reps">
+            <Field
+              label="Target reps"
+              htmlFor="target-reps"
+              hint="6-12 or 8-10 each leg"
+            >
               <Input
                 id="target-reps"
                 className="h-11"
-                inputMode="numeric"
                 name="reps"
-                defaultValue={editing?.targetReps ?? 8}
+                maxLength={80}
+                defaultValue={
+                  editing?.targetRepsLabel ??
+                  (editing?.targetReps != null ? String(editing.targetReps) : "8")
+                }
                 key={`reps-${editing?.id ?? "new"}`}
               />
             </Field>
@@ -502,9 +559,160 @@ export function AdminEditor({
           ) : null}
         </div>
       </form>
+      </div>
       ) : (
         <p className="text-sm text-muted-foreground">No workouts in this program yet.</p>
       )}
+    </div>
+  );
+}
+
+function PhaseAssign({
+  workout,
+  phases,
+}: {
+  workout: Workout;
+  phases: Phase[];
+}) {
+  const router = useRouter();
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  if (!phases.length) return null;
+
+  return (
+    <fieldset className="grid gap-2 border border-border bg-card p-4 sm:p-5">
+      <legend className="px-1 text-sm font-medium">Phase</legend>
+      <p className="text-sm text-muted-foreground">
+        Members can open this workout once they reach the phase. A workout
+        with no phase stays open.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <PhaseChoice
+          pressed={!workout.phaseId}
+          disabled={saving}
+          onClick={() => choose(null)}
+        >
+          No phase
+        </PhaseChoice>
+        {phases.map((phase) => (
+          <PhaseChoice
+            key={phase.id}
+            pressed={workout.phaseId === phase.id}
+            disabled={saving}
+            onClick={() => choose(phase.id)}
+          >
+            {phase.title}
+            <span className="block text-xs opacity-70">
+              Weeks {phase.startsWeek}–{phase.endsWeek}
+            </span>
+          </PhaseChoice>
+        ))}
+      </div>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </fieldset>
+  );
+
+  async function choose(phaseId: string | null) {
+    if (phaseId === (workout.phaseId ?? null)) return;
+    setSaving(true);
+    const result = await assignWorkoutPhase(workout.id, phaseId);
+    setError(result.error ?? "");
+    setSaving(false);
+    if (!result.error) router.refresh();
+  }
+}
+
+function PhaseChoice({
+  pressed,
+  disabled,
+  onClick,
+  children,
+}: {
+  pressed: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "border px-3 py-2 text-left text-sm disabled:opacity-60",
+        pressed
+          ? "border-foreground bg-foreground text-background"
+          : "border-border",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DeleteWorkout({
+  title,
+  onDelete,
+}: {
+  title: string;
+  onDelete: () => Promise<string | null>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+
+  return (
+    <div className="grid gap-3 border border-border bg-card p-4 sm:p-5">
+      <div>
+        <p className="text-sm font-medium">Delete workout</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          This permanently removes {title}, its exercises, demo videos, and any
+          logs members saved for it.
+        </p>
+      </div>
+      {confirming ? (
+        <div className="flex flex-wrap gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11"
+            disabled={pending}
+            onClick={() => {
+              setConfirming(false);
+              setError("");
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="h-11"
+            disabled={pending}
+            onClick={() => {
+              setPending(true);
+              void onDelete().then((message) => {
+                setError(message ?? "");
+                setPending(false);
+                if (!message) setConfirming(false);
+              });
+            }}
+          >
+            {pending ? "Deleting" : "Delete permanently"}
+          </Button>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11 w-fit"
+          onClick={() => setConfirming(true)}
+        >
+          Delete workout
+        </Button>
+      )}
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

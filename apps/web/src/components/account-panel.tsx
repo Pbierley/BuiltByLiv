@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/field";
 import { UnitToggle } from "@/components/unit-toggle";
+import { membership, venmoNote } from "@/lib/content";
 import { deleteAccount, saveProfile, sendMessage, signOut } from "@/lib/actions";
 
 export function AccountPanel({
@@ -114,6 +116,14 @@ export function AccountPanel({
           If you subscribed in the App Store or Google Play, cancel there. This
           screen can only change a card billed on the website.
         </p>
+        <p className="text-sm leading-6">
+          Pay the ${membership.price} monthly membership on Venmo. In the
+          payment note, write {venmoNote(viewer.email)}. Access starts after
+          Liv sends an invite. This site does not collect that payment.
+        </p>
+        <Link href="/pay" className="text-sm underline-offset-4 hover:underline">
+          Pay with Venmo
+        </Link>
       </section>
 
       <form action={signOut}>

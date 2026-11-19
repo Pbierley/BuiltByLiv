@@ -15,7 +15,8 @@ export default async function ProgramsPage() {
         </p>
         <h1 className="mt-2 font-display text-4xl tracking-tight">Programs</h1>
         <p className="mt-2 max-w-xl text-muted-foreground">
-          Open any workout. Nothing is locked to a calendar day.
+          Strength Foundations is 12 weeks. Each phase lasts three weeks, and
+          later workouts stay locked until you reach that phase.
         </p>
       </div>
       <ul className="grid gap-4">

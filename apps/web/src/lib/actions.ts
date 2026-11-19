@@ -7,6 +7,7 @@ import { toKilograms } from "@/lib/units";
 import {
   exerciseCreateSchema,
   exerciseUpdateSchema,
+  phaseAssignSchema,
   messageSchema,
   passwordError,
   profileSchema,
@@ -16,6 +17,9 @@ import {
   VIDEO_TYPES,
   videoIdSchema,
   MAX_VIDEO_BYTES,
+  MAX_QR_BYTES,
+  inviteEmailSchema,
+  parseVenmoUsername,
   weighInSchema,
   workoutDraftSchema,
 } from "@/lib/validation";
@@ -25,9 +29,11 @@ import {
   siteOrigin,
   ConfigError,
 } from "@/lib/supabase/server";
+import { normalizeRepTarget } from "@/lib/content";
 import { getViewer } from "@/lib/queries";
+import { memberLocked } from "@/lib/phases";
 
-export type ActionResult = { error?: string; ok?: boolean };
+export type ActionResult = { error?: string; ok?: boolean; message?: string };
 
 function safeNext(value: FormDataEntryValue | null, fallback: string) {
   if (typeof value !== "string") return fallback;
@@ -235,10 +241,14 @@ export async function saveSession(input: unknown): Promise<ActionResult> {
   const supabase = await createSupabase();
   const { data: workout } = await supabase
     .from("workouts")
-    .select("id, title")
+    .select("id, title, phases(position)")
     .eq("id", parsed.data.workoutId)
     .maybeSingle();
   if (!workout) return { error: "That workout is not available." };
+  const phase = Array.isArray(workout.phases) ? workout.phases[0] : workout.phases;
+  if (memberLocked(phase?.position, viewer)) {
+    return { error: "This workout is locked until you reach that phase." };
+  }
 
   const { data: existing } = await supabase
     .from("workout_sessions")
@@ -334,6 +344,27 @@ export async function sendMessage(memberId: string, body: string): Promise<Actio
   return { ok: true };
 }
 
+function storedReps(exercise: {
+  trackingType: "weight_reps" | "reps" | "duration";
+  targetReps?: number;
+  targetRepsLabel?: string;
+}):
+  | { error: string }
+  | { target_reps: number | null; target_reps_label: string | null } {
+  if (exercise.trackingType === "duration") {
+    return { target_reps: null, target_reps_label: null };
+  }
+  const normalized = normalizeRepTarget(
+    exercise.targetRepsLabel ?? "",
+    exercise.targetReps,
+  );
+  if ("error" in normalized) return normalized;
+  return {
+    target_reps: normalized.targetReps ?? exercise.targetReps ?? 8,
+    target_reps_label: normalized.targetRepsLabel ?? null,
+  };
+}
+
 export async function createWorkout(input: unknown): Promise<ActionResult & { workoutId?: string; exerciseIds?: string[] }> {
   const parsed = workoutDraftSchema.safeParse(input);
   if (!parsed.success) return { error: "Check the workout name and each exercise." };
@@ -342,6 +373,24 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
 
   const supabase = await createSupabase();
   const workoutId = newId(parsed.data.title, "workout");
+  if (parsed.data.phaseId) {
+    const { data: phase } = await supabase
+      .from("phases")
+      .select("id, program_id")
+      .eq("id", parsed.data.phaseId)
+      .maybeSingle();
+    if (!phase || phase.program_id !== parsed.data.programId) {
+      return { error: "Choose a phase from this program." };
+    }
+  }
+
+  const exerciseReps: { target_reps: number | null; target_reps_label: string | null }[] = [];
+  for (const exercise of parsed.data.exercises) {
+    const reps = storedReps(exercise);
+    if ("error" in reps) return { error: reps.error };
+    exerciseReps.push(reps);
+  }
+
   const { error: workoutError } = await supabase.from("workouts").insert({
     id: workoutId,
     program_id: parsed.data.programId,
@@ -349,6 +398,7 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
     summary: parsed.data.summary || "Added by Liv.",
     published: true,
     position: 100,
+    phase_id: parsed.data.phaseId ?? null,
   });
   if (workoutError) return { error: "The workout could not be created." };
 
@@ -363,6 +413,8 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
       published: true,
     });
     if (exerciseError) return { error: "An exercise could not be created." };
+    const reps = exerciseReps[index];
+    if (!reps) return { error: "Check the rep target." };
     const { error: linkError } = await supabase.from("workout_exercises").insert({
       id: exerciseId,
       workout_id: workoutId,
@@ -371,7 +423,8 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
       cue: exercise.cue || null,
       tracking_type: exercise.trackingType,
       sets: exercise.sets,
-      target_reps: exercise.trackingType === "duration" ? null : exercise.targetReps ?? 8,
+      target_reps: reps.target_reps,
+      target_reps_label: reps.target_reps_label,
       target_duration_seconds:
         exercise.trackingType === "duration" ? exercise.targetDurationSeconds ?? 45 : null,
       rest_seconds: exercise.restSeconds,
@@ -381,7 +434,48 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
 
   revalidatePath("/admin");
   revalidatePath("/app/programs");
+  revalidatePath("/app");
   return { ok: true, workoutId, exerciseIds };
+}
+
+export async function assignWorkoutPhase(
+  workoutId: string,
+  phaseId: string | null,
+): Promise<ActionResult> {
+  const parsed = phaseAssignSchema.safeParse({ workoutId, phaseId });
+  if (!parsed.success) return { error: "That phase could not be saved." };
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can assign phases." };
+
+  const supabase = await createSupabase();
+  const { data: workout } = await supabase
+    .from("workouts")
+    .select("id, program_id")
+    .eq("id", parsed.data.workoutId)
+    .maybeSingle();
+  if (!workout) return { error: "That workout was not found." };
+
+  if (parsed.data.phaseId) {
+    const { data: phase } = await supabase
+      .from("phases")
+      .select("id, program_id")
+      .eq("id", parsed.data.phaseId)
+      .maybeSingle();
+    if (!phase || phase.program_id !== workout.program_id) {
+      return { error: "Choose a phase from this program." };
+    }
+  }
+
+  const { error } = await supabase
+    .from("workouts")
+    .update({ phase_id: parsed.data.phaseId })
+    .eq("id", workout.id);
+  if (error) return { error: "The phase could not be saved." };
+  revalidatePath("/admin");
+  revalidatePath("/app");
+  revalidatePath("/app/programs");
+  revalidatePath(`/app/workouts/${workout.id}`);
+  return { ok: true };
 }
 
 export async function addExercise(
@@ -391,6 +485,8 @@ export async function addExercise(
   if (!parsed.success) return { error: "Check the exercise details." };
   const viewer = await getViewer();
   if (!viewer || viewer.role !== "admin") return { error: "Only Liv can add exercises." };
+  const reps = storedReps(parsed.data);
+  if ("error" in reps) return { error: reps.error };
 
   const supabase = await createSupabase();
   const { data: workout } = await supabase
@@ -425,7 +521,8 @@ export async function addExercise(
     cue: parsed.data.cue || null,
     tracking_type: parsed.data.trackingType,
     sets: parsed.data.sets,
-    target_reps: parsed.data.trackingType === "duration" ? null : parsed.data.targetReps ?? 8,
+    target_reps: reps.target_reps,
+    target_reps_label: reps.target_reps_label,
     target_duration_seconds:
       parsed.data.trackingType === "duration" ? parsed.data.targetDurationSeconds ?? 45 : null,
     rest_seconds: parsed.data.restSeconds,
@@ -446,6 +543,9 @@ export async function updateExercise(input: unknown): Promise<ActionResult> {
   if (!parsed.success) return { error: "Check the exercise details." };
   const viewer = await getViewer();
   if (!viewer || viewer.role !== "admin") return { error: "Only Liv can edit workouts." };
+
+  const reps = storedReps(parsed.data);
+  if ("error" in reps) return { error: reps.error };
 
   const supabase = await createSupabase();
   const { error: exerciseError } = await supabase
@@ -469,7 +569,8 @@ export async function updateExercise(input: unknown): Promise<ActionResult> {
       cue: parsed.data.cue || null,
       tracking_type: parsed.data.trackingType,
       sets: parsed.data.sets,
-      target_reps: parsed.data.trackingType === "duration" ? null : parsed.data.targetReps ?? 8,
+      target_reps: reps.target_reps,
+      target_reps_label: reps.target_reps_label,
       target_duration_seconds:
         parsed.data.trackingType === "duration" ? parsed.data.targetDurationSeconds ?? 45 : null,
       rest_seconds: parsed.data.restSeconds,
@@ -523,6 +624,84 @@ export async function uploadExerciseVideo(exerciseId: string, formData: FormData
   return { ok: true };
 }
 
+export async function deleteWorkout(workoutId: string): Promise<ActionResult> {
+  if (!/^[a-z0-9-]{1,64}$/.test(workoutId)) return { error: "That workout was not found." };
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can delete workouts." };
+
+  let admin;
+  try {
+    admin = createServiceClient();
+  } catch (error) {
+    if (error instanceof ConfigError) return { error: "Deleting workouts is not configured yet." };
+    throw error;
+  }
+
+  const { data: workout } = await admin
+    .from("workouts")
+    .select("id")
+    .eq("id", workoutId)
+    .maybeSingle();
+  if (!workout) return { error: "That workout was not found." };
+
+  const { data: links, error: linkReadError } = await admin
+    .from("workout_exercises")
+    .select("id, exercise_id")
+    .eq("workout_id", workout.id);
+  if (linkReadError) return { error: "The workout could not be deleted." };
+  const linkIds = (links ?? []).map((link) => link.id);
+  const exerciseIds = [...new Set((links ?? []).map((link) => link.exercise_id))];
+
+  if (linkIds.length) {
+    const { error: setError } = await admin
+      .from("session_sets")
+      .delete()
+      .in("workout_exercise_id", linkIds);
+    if (setError) return { error: "The workout could not be deleted." };
+  }
+
+  const { error: sessionError } = await admin
+    .from("workout_sessions")
+    .delete()
+    .eq("workout_id", workout.id);
+  if (sessionError) return { error: "The workout could not be deleted." };
+
+  if (linkIds.length) {
+    const { error } = await admin.from("workout_exercises").delete().in("id", linkIds);
+    if (error) return { error: "The workout could not be deleted." };
+  }
+
+  if (exerciseIds.length) {
+    const { data: stillUsed } = await admin
+      .from("workout_exercises")
+      .select("exercise_id")
+      .in("exercise_id", exerciseIds);
+    const used = new Set((stillUsed ?? []).map((row) => row.exercise_id));
+    const removable = exerciseIds.filter((exerciseId) => !used.has(exerciseId));
+    if (removable.length) {
+      const { data: clips } = await admin
+        .from("exercises")
+        .select("video_path")
+        .in("id", removable);
+      const paths = (clips ?? [])
+        .map((clip) => clip.video_path)
+        .filter((path): path is string => Boolean(path));
+      const { error } = await admin.from("exercises").delete().in("id", removable);
+      if (error) return { error: "The workout could not be deleted." };
+      if (paths.length) await admin.storage.from("exercise-videos").remove(paths);
+    }
+  }
+
+  const { error: workoutError } = await admin.from("workouts").delete().eq("id", workout.id);
+  if (workoutError) return { error: "The workout could not be deleted." };
+
+  revalidatePath("/admin");
+  revalidatePath("/app");
+  revalidatePath("/app/programs");
+  revalidatePath(`/app/workouts/${workout.id}`);
+  return { ok: true };
+}
+
 export async function deleteAccount(formData: FormData): Promise<ActionResult> {
   if (formData.get("confirm") !== "DELETE") {
     return { error: "Type DELETE to confirm." };
@@ -544,6 +723,243 @@ export async function deleteAccount(formData: FormData): Promise<ActionResult> {
   const supabase = await createSupabase();
   await supabase.auth.signOut();
   redirect("/");
+}
+
+const qrContentType = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+} as const;
+
+type ServiceClient = ReturnType<typeof createServiceClient>;
+
+function authToken(value: string) {
+  return value.length >= 20 && value.length <= 8192 && !/[\s"'<>]/.test(value);
+}
+
+async function qrKind(file: File) {
+  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "png" as const;
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg" as const;
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "webp" as const;
+  }
+  return null;
+}
+
+export async function saveVenmoSettings(formData: FormData): Promise<ActionResult> {
+  const parsed = parseVenmoUsername(String(formData.get("username") ?? ""));
+  if ("error" in parsed) return parsed;
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can save Venmo details." };
+
+  const file = formData.get("qr");
+  const remove = formData.get("removeQr") === "yes";
+  let upload: { path: string; body: File; contentType: string } | null = null;
+  if (file instanceof File && file.size > 0) {
+    if (file.size > MAX_QR_BYTES) {
+      return { error: "Use a PNG, JPEG, or WebP image under 2 MB." };
+    }
+    const kind = await qrKind(file);
+    if (!kind) return { error: "Use a PNG, JPEG, or WebP image under 2 MB." };
+    upload = {
+      path: `${crypto.randomUUID()}.${kind}`,
+      body: file,
+      contentType: qrContentType[kind],
+    };
+  }
+
+  const supabase = await createSupabase();
+  const { data: current, error: readError } = await supabase
+    .from("payment_settings")
+    .select("qr_path")
+    .eq("id", 1)
+    .maybeSingle();
+  if (readError || !current) return { error: "Venmo details could not be saved." };
+
+  if (upload) {
+    const { error: uploadError } = await supabase.storage
+      .from("payment-qr")
+      .upload(upload.path, upload.body, { contentType: upload.contentType, upsert: false });
+    if (uploadError) return { error: "The QR image could not be uploaded." };
+  }
+
+  const nextPath = upload ? upload.path : remove ? null : current.qr_path;
+  const { error: updateError } = await supabase
+    .from("payment_settings")
+    .update({
+      venmo_username: parsed.username,
+      qr_path: nextPath,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", 1);
+  if (updateError) {
+    if (upload) await supabase.storage.from("payment-qr").remove([upload.path]);
+    return { error: "Venmo details could not be saved." };
+  }
+
+  if (current.qr_path && current.qr_path !== nextPath) {
+    await supabase.storage.from("payment-qr").remove([current.qr_path]);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/pay");
+  revalidatePath("/app/account");
+  return { ok: true };
+}
+
+export async function inviteMember(formData: FormData): Promise<ActionResult> {
+  const parsed = inviteEmailSchema.safeParse(formData.get("email"));
+  if (!parsed.success) return { error: "Enter a valid email." };
+  if (formData.get("paid") !== "yes") {
+    return { error: "Confirm the Venmo payment before sending an invite." };
+  }
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can send invites." };
+
+  let admin: ServiceClient;
+  try {
+    admin = createServiceClient();
+  } catch (error) {
+    if (error instanceof ConfigError) return { error: "Invites are not configured yet." };
+    throw error;
+  }
+
+  const email = parsed.data;
+  const existingId = await memberIdForEmail(admin, email);
+  if (existingId) return grantExistingMember(admin, email, existingId, viewer.id);
+
+  const origin = siteOrigin((await headers()).get("origin"));
+  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${origin}/reset`,
+  });
+  if (error || !data.user) {
+    if (error && alreadyRegistered(error.message)) {
+      const id = await memberIdForEmail(admin, email);
+      if (id) return grantExistingMember(admin, email, id, viewer.id);
+    }
+    return { error: "The invite could not be sent." };
+  }
+
+  if (!(await activateMembership(admin, data.user.id))) {
+    return { error: "The membership could not be updated." };
+  }
+  if (!(await recordInvite(email, viewer.id, "invited"))) {
+    return { error: "The invite could not be saved." };
+  }
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    message: "Invite sent. They get an email to set a password. Membership is active.",
+  };
+}
+
+export async function acceptInviteSession(
+  accessToken: string,
+  refreshToken: string,
+): Promise<ActionResult> {
+  if (!authToken(accessToken) || !authToken(refreshToken)) {
+    return { error: "This link could not be opened. Ask Liv to send it again." };
+  }
+  try {
+    const supabase = await createSupabase();
+    const { error } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (error) return { error: "This link could not be opened. Ask Liv to send it again." };
+  } catch (error) {
+    if (error instanceof ConfigError) return { error: "Accounts are not configured yet." };
+    throw error;
+  }
+  return { ok: true };
+}
+
+async function grantExistingMember(
+  admin: ServiceClient,
+  email: string,
+  userId: string,
+  invitedBy: string,
+): Promise<ActionResult> {
+  if (!(await activateMembership(admin, userId))) {
+    return { error: "The membership could not be updated." };
+  }
+  if (!(await recordInvite(email, invitedBy, "already_had_account"))) {
+    return { error: "The invite could not be saved." };
+  }
+  revalidatePath("/admin");
+  return { ok: true, message: "They already have an account. Membership is active." };
+}
+
+async function memberIdForEmail(admin: ServiceClient, email: string) {
+  const { data: profiles, error } = await admin
+    .from("profiles")
+    .select("id")
+    .eq("email", email)
+    .limit(1);
+  const profileId = profiles?.[0]?.id;
+  if (!error && typeof profileId === "string") return profileId;
+
+  const { data: authId, error: lookupError } = await admin.rpc("user_id_by_email", {
+    target: email,
+  });
+  if (lookupError || typeof authId !== "string" || !authId) return null;
+  return authId;
+}
+
+async function activateMembership(admin: ServiceClient, userId: string) {
+  const membership = {
+    status: "active" as const,
+    provider: null,
+    trial_end: null,
+    current_period_end: null,
+    updated_at: new Date().toISOString(),
+  };
+  const { data: existing, error: readError } = await admin
+    .from("entitlements")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (readError) return false;
+  if (existing) {
+    const { error } = await admin.from("entitlements").update(membership).eq("user_id", userId);
+    return !error;
+  }
+  const { error } = await admin.from("entitlements").insert({ user_id: userId, ...membership });
+  return !error;
+}
+
+async function recordInvite(
+  email: string,
+  invitedBy: string,
+  status: "invited" | "already_had_account",
+) {
+  const supabase = await createSupabase();
+  const { error } = await supabase.from("invites").upsert(
+    {
+      email,
+      invited_at: new Date().toISOString(),
+      invited_by: invitedBy,
+      status,
+    },
+    { onConflict: "email" },
+  );
+  return !error;
+}
+
+function alreadyRegistered(message: string) {
+  return /already (been )?registered|already exists|user already/i.test(message);
 }
 
 function newId(label: string, kind: string) {
