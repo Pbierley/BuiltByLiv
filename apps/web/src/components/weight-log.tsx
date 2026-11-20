@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/field";
+import { MetricChart, trendText } from "@/components/metric-chart";
 import { deleteWeighIn, saveWeighIn } from "@/lib/actions";
 
 export function WeightLog({
   entries,
   unit,
 }: {
-  entries: { id: string; date: string; weight: number }[];
+  entries: { id: string; date: string; isoDate?: string; weight: number }[];
   unit: "lb" | "kg";
 }) {
   const router = useRouter();
@@ -78,6 +79,8 @@ export function WeightLog({
         </form>
       </section>
 
+      <WeightChart entries={entries} unit={unit} />
+
       <ul className="divide-y divide-border border border-border bg-card">
         {entries.map((entry) => (
           <li
@@ -105,5 +108,44 @@ export function WeightLog({
         ))}
       </ul>
     </div>
+  );
+}
+
+function WeightChart({
+  entries,
+  unit,
+}: {
+  entries: { date: string; isoDate?: string; weight: number }[];
+  unit: "lb" | "kg";
+}) {
+  const points = [...entries]
+    .reverse()
+    .map((entry) => ({
+      at: entry.isoDate ?? entry.date,
+      label: entry.date,
+      value: entry.weight,
+    }));
+  if (!points.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        The chart starts when you save a weigh-in.
+      </p>
+    );
+  }
+  const format = (value: number) => {
+    const rounded = Math.round(value * 10) / 10;
+    const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+    return `${text} ${unit}`;
+  };
+  const tick = (value: number) => {
+    const rounded = Math.round(value);
+    return String(rounded);
+  };
+  return (
+    <section className="grid gap-2 border border-border bg-card p-5">
+      <p className="text-sm text-muted-foreground">Weight over time</p>
+      <p className="text-sm text-muted-foreground">{trendText(points, format)}</p>
+      <MetricChart points={points} formatValue={format} formatTick={tick} label="Body weight" />
+    </section>
   );
 }

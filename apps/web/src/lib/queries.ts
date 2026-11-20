@@ -14,6 +14,7 @@ export type Viewer = {
   role: "member" | "admin";
   acknowledged: boolean;
   status: "trialing" | "active" | "grace" | "expired";
+  blocked: boolean;
   trialDaysLeft: number;
   statusLabel: string;
   startedAt: string | null;
@@ -78,14 +79,20 @@ export async function getViewer(): Promise<Viewer | null> {
 
   const { data: entitlement } = await supabase
     .from("entitlements")
-    .select("status, trial_end")
+    .select("status, trial_end, current_period_end")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const status = entitlement?.status ?? "expired";
-  const trialDaysLeft = daysUntil(entitlement?.trial_end ?? null);
-  const statusLabel =
-    status === "trialing"
+  const storedStatus = entitlement?.status ?? "expired";
+  const endsAt =
+    entitlement?.current_period_end ??
+    (storedStatus === "trialing" ? entitlement?.trial_end ?? null : null);
+  const blocked = !membershipOpen(profile.role, storedStatus, endsAt);
+  const status = blocked ? "expired" : storedStatus;
+  const trialDaysLeft = daysUntil(endsAt);
+  const statusLabel = blocked
+    ? "Membership ended"
+    : status === "trialing"
       ? `Trial · ${trialDaysLeft} days left`
       : status === "active"
         ? "Member"
@@ -102,6 +109,7 @@ export async function getViewer(): Promise<Viewer | null> {
     role: profile.role,
     acknowledged: Boolean(profile.coaching_acknowledged_at),
     status,
+    blocked,
     trialDaysLeft,
     statusLabel,
     startedAt: profile.created_at ?? null,
@@ -200,6 +208,115 @@ export async function listWeighIns(viewer: Viewer) {
     isoDate: row.weighed_on as string,
     weight: fromKilograms(Number(row.weight_kg), viewer.unit),
   }));
+}
+
+export type ProgressPoint = {
+  at: string;
+  label: string;
+  value: number;
+};
+
+export type ExerciseProgress = {
+  id: string;
+  name: string;
+  weight: ProgressPoint[];
+  reps: ProgressPoint[];
+  volume: ProgressPoint[];
+  duration: ProgressPoint[];
+};
+
+export async function listExerciseProgress(viewer: Viewer): Promise<ExerciseProgress[]> {
+  const supabase = await createSupabase();
+  const { data, error } = await supabase
+    .from("workout_sessions")
+    .select(
+      "id, started_at, completed_at, session_sets(set_index, reps, weight_kg, duration_seconds, skipped, workout_exercises(exercises(name)))",
+    )
+    .eq("user_id", viewer.id)
+    .order("started_at", { ascending: true });
+  if (error) throw error;
+
+  const groups = new Map<string, ExerciseProgress & { latest: string }>();
+  for (const session of data ?? []) {
+    const at = session.completed_at ?? session.started_at;
+    if (!at) continue;
+    const logged = new Map<
+      string,
+      {
+        name: string;
+        weight: number | null;
+        reps: number;
+        volume: number;
+        duration: number;
+        sawReps: boolean;
+        sawVolume: boolean;
+        sawDuration: boolean;
+      }
+    >();
+    for (const set of session.session_sets ?? []) {
+      if (set.skipped) continue;
+      const link = first(set.workout_exercises);
+      const exercise = first(link?.exercises ?? null);
+      const name = exercise?.name?.trim() || "Exercise";
+      const id = name.toLowerCase();
+      const bucket = logged.get(id) ?? {
+        name,
+        weight: null,
+        reps: 0,
+        volume: 0,
+        duration: 0,
+        sawReps: false,
+        sawVolume: false,
+        sawDuration: false,
+      };
+      if (set.weight_kg != null) {
+        const weight = fromKilograms(Number(set.weight_kg), viewer.unit);
+        bucket.weight = bucket.weight == null ? weight : Math.max(bucket.weight, weight);
+      }
+      if (set.reps != null) {
+        bucket.reps += set.reps;
+        bucket.sawReps = true;
+      }
+      if (set.weight_kg != null && set.reps != null) {
+        const weight = fromKilograms(Number(set.weight_kg), viewer.unit);
+        bucket.volume += weight * set.reps;
+        bucket.sawVolume = true;
+      }
+      if (set.duration_seconds != null) {
+        bucket.duration += set.duration_seconds;
+        bucket.sawDuration = true;
+      }
+      logged.set(id, bucket);
+    }
+
+    for (const [id, bucket] of logged) {
+      const series = groups.get(id) ?? {
+        id,
+        name: bucket.name,
+        weight: [] as ProgressPoint[],
+        reps: [] as ProgressPoint[],
+        volume: [] as ProgressPoint[],
+        duration: [] as ProgressPoint[],
+        latest: at,
+      };
+      const point = { at, label: formatCalendarDate(at) };
+      if (bucket.weight != null) series.weight.push({ ...point, value: bucket.weight });
+      if (bucket.sawReps) series.reps.push({ ...point, value: bucket.reps });
+      if (bucket.sawVolume) series.volume.push({ ...point, value: Math.round(bucket.volume) });
+      if (bucket.sawDuration) series.duration.push({ ...point, value: bucket.duration });
+      series.name = bucket.name;
+      series.latest = at;
+      groups.set(id, series);
+    }
+  }
+
+  return [...groups.values()]
+    .filter(
+      (series) =>
+        series.weight.length || series.reps.length || series.volume.length || series.duration.length,
+    )
+    .sort((a, b) => (a.latest < b.latest ? 1 : -1))
+    .map(({ latest: _latest, ...series }) => series);
 }
 
 export async function listHistory(viewer: Viewer) {
@@ -422,6 +539,18 @@ function phaseSchemaMissing(error: { code?: string }) {
 function first<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
+}
+
+function membershipOpen(
+  role: "member" | "admin",
+  status: string,
+  endsAt: string | null,
+) {
+  if (role === "admin") return true;
+  if (status !== "trialing" && status !== "active" && status !== "grace") return false;
+  if (!endsAt) return status !== "trialing";
+  const end = Date.parse(endsAt);
+  return !Number.isNaN(end) && end > Date.now();
 }
 
 function daysUntil(iso: string | null) {

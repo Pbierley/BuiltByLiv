@@ -328,6 +328,9 @@ export async function sendMessage(memberId: string, body: string): Promise<Actio
   if (!parsed.success) return { error: "Write a shorter message." };
   const viewer = await getViewer();
   if (!viewer) return { error: "Log in again." };
+  if (viewer.blocked) {
+    return { error: "Pay on Venmo to continue. Liv turns access back on after the payment." };
+  }
   if (viewer.role !== "admin" && parsed.data.memberId !== viewer.id) {
     return { error: "That conversation is not available." };
   }

@@ -1,12 +1,16 @@
 import Link from "next/link";
-import { getViewer, listHistory } from "@/lib/queries";
+import { ExerciseProgressCharts } from "@/components/exercise-progress";
+import { getViewer, listExerciseProgress, listHistory } from "@/lib/queries";
 
 export const metadata = { title: "History" };
 
 export default async function HistoryPage() {
   const viewer = await getViewer();
   if (!viewer) return null;
-  const sessions = await listHistory(viewer);
+  const [sessions, exercises] = await Promise.all([
+    listHistory(viewer),
+    listExerciseProgress(viewer),
+  ]);
 
   return (
     <div className="grid gap-8">
@@ -16,10 +20,11 @@ export default async function HistoryPage() {
         </p>
         <h1 className="mt-2 font-display text-4xl tracking-tight">History</h1>
         <p className="mt-2 max-w-xl text-muted-foreground">
-          What you logged. Liv&apos;s prescription stays on the workout, and
-          these rows stay yours.
+          Charts follow the weight, reps, volume, and time you log for each exercise.
+          The list below is each finished session.
         </p>
       </div>
+      <ExerciseProgressCharts exercises={exercises} unit={viewer.unit} />
       {sessions.length ? (
         <ul className="divide-y divide-border border border-border bg-card">
           {sessions.map((session) => (
