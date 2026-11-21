@@ -29,6 +29,17 @@ export type LoggedSet = {
   reps?: number;
   durationSeconds?: number;
   skipped?: boolean;
+  setIndex?: number;
+  movement?: number;
+};
+
+export type CircuitMovement = {
+  position: number;
+  name: string;
+  trackingType: TrackingType;
+  targetReps?: number;
+  targetRepsLabel?: string;
+  targetDurationSeconds?: number;
 };
 
 export type Exercise = {
@@ -43,6 +54,8 @@ export type Exercise = {
   targetDurationSeconds?: number;
   restSeconds: number;
   logged: LoggedSet[];
+  allLogs?: LoggedSet[];
+  movements?: CircuitMovement[];
   hasVideo?: boolean;
   published?: boolean;
 };
@@ -62,6 +75,7 @@ export type Workout = {
   programId: string;
   title: string;
   summary: string;
+  warmup?: string;
   exercises: Exercise[];
   phaseId?: string | null;
   phaseTitle?: string | null;
@@ -381,6 +395,9 @@ export function trackingLabel(type: TrackingType) {
 export const REP_LABEL_MAX = 80;
 
 export function prescriptionLabel(exercise: Exercise) {
+  if (exercise.movements && exercise.movements.length >= 2) {
+    return `${exercise.sets} rounds · ${exercise.movements.map((movement) => movement.name).join(" · ")}`;
+  }
   if (exercise.trackingType === "duration") {
     return `${exercise.sets} × ${formatDuration(exercise.targetDurationSeconds ?? 0)}`;
   }

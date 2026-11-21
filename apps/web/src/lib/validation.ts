@@ -45,6 +45,14 @@ export const weighInSchema = z.object({
   weight: z.number().positive().lt(500),
 });
 
+export const circuitMovementSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  trackingType,
+  targetReps: z.number().int().min(1).max(500).optional(),
+  targetRepsLabel: z.string().trim().max(REP_LABEL_MAX).optional(),
+  targetDurationSeconds: z.number().int().min(1).max(7200).optional(),
+});
+
 export const exerciseDraftSchema = z.object({
   name: z.string().trim().min(1).max(80),
   coaching: z.string().trim().max(2000),
@@ -55,6 +63,7 @@ export const exerciseDraftSchema = z.object({
   targetRepsLabel: z.string().trim().max(REP_LABEL_MAX).optional(),
   targetDurationSeconds: z.number().int().min(1).max(7200).optional(),
   restSeconds: z.number().int().min(0).max(600),
+  movements: z.array(circuitMovementSchema).max(3).optional(),
 });
 
 const phaseId = z.string().regex(/^[a-z0-9-]{1,64}$/);
@@ -63,6 +72,7 @@ export const workoutDraftSchema = z.object({
   programId: id,
   title: z.string().trim().min(1).max(80),
   summary: z.string().trim().max(300),
+  warmup: z.string().trim().max(2000).optional(),
   phaseId: phaseId.nullable().optional(),
   exercises: z.array(exerciseDraftSchema).min(1).max(20),
 });
@@ -70,6 +80,16 @@ export const workoutDraftSchema = z.object({
 export const phaseAssignSchema = z.object({
   workoutId: z.string().regex(/^[a-z0-9-]{1,64}$/),
   phaseId: phaseId.nullable(),
+});
+
+export const workoutRenameSchema = z.object({
+  workoutId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  title: z.string().trim().min(1).max(80),
+});
+
+export const workoutWarmupSchema = z.object({
+  workoutId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  warmup: z.string().trim().max(2000),
 });
 
 export const exerciseUpdateSchema = exerciseDraftSchema.extend({
@@ -85,6 +105,7 @@ export const exerciseCreateSchema = exerciseDraftSchema.extend({
 export const sessionSetSchema = z.object({
   exerciseId: id,
   index: z.number().int().min(0).max(39),
+  movement: z.number().int().min(1).max(3).optional(),
   reps: z.number().int().min(0).max(500).optional(),
   weight: z.number().min(0).lt(500).optional(),
   durationSeconds: z.number().int().min(0).max(7200).optional(),

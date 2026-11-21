@@ -77,7 +77,7 @@ export function AdminStudio({
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
         <div className={section === "workouts" ? undefined : "hidden"}>
           <AdminEditor
-            key={workouts.map((workout) => workout.id).join()}
+            key={[...workouts].map((workout) => workout.id).sort().join()}
             programs={programs}
             workouts={workouts}
             phases={phases}

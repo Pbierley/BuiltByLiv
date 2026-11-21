@@ -30,10 +30,7 @@ export function WorkoutSession({
   const [exerciseId, setExerciseId] = useState(workout.exercises[0]?.id ?? "");
   const [setsByExercise, setSetsByExercise] = useState(() =>
     Object.fromEntries(
-      workout.exercises.map((exercise) => [
-        exercise.id,
-        padSets(exercise),
-      ]),
+      workout.exercises.map((exercise) => [exercise.id, partsFor(exercise)]),
     ),
   );
   const [runningKey, setRunningKey] = useState<string | null>(null);
@@ -48,14 +45,19 @@ export function WorkoutSession({
   useEffect(() => {
     if (!runningKey) return;
     const timer = window.setInterval(() => {
-      const [id, indexText] = runningKey.split(":");
+      const [id, partText, indexText] = runningKey.split(":");
+      const part = Number(partText);
       const index = Number(indexText);
       setSetsByExercise((current) => ({
         ...current,
-        [id]: current[id].map((set, setIndex) =>
-          setIndex === index
-            ? { ...set, durationSeconds: (set.durationSeconds ?? 0) + 1 }
-            : set,
+        [id]: current[id].map((rows, partIndex) =>
+          partIndex === part
+            ? rows.map((set, setIndex) =>
+                setIndex === index
+                  ? { ...set, durationSeconds: (set.durationSeconds ?? 0) + 1 }
+                  : set,
+              )
+            : rows,
         ),
       }));
     }, 1000);
@@ -64,18 +66,22 @@ export function WorkoutSession({
 
   if (!exercise) return null;
 
-  const rows = setsByExercise[exercise.id] ?? [];
+  const parts = setsByExercise[exercise.id] ?? [];
+  const circuit = (exercise.movements?.length ?? 0) >= 2;
 
   function loggedPayload() {
-    return Object.entries(setsByExercise).flatMap(([exerciseId, rows]) =>
-      rows.map((set, index) => ({
-        exerciseId,
-        index,
-        reps: set.reps,
-        weight: set.weight,
-        durationSeconds: set.durationSeconds,
-        skipped: set.skipped,
-      })),
+    return Object.entries(setsByExercise).flatMap(([id, exerciseParts]) =>
+      exerciseParts.flatMap((rows, part) =>
+        rows.map((set, index) => ({
+          exerciseId: id,
+          index,
+          movement: exerciseParts.length > 1 ? part + 1 : undefined,
+          reps: set.reps,
+          weight: set.weight,
+          durationSeconds: set.durationSeconds,
+          skipped: set.skipped,
+        })),
+      ),
     );
   }
 
@@ -89,11 +95,15 @@ export function WorkoutSession({
     return !result.error;
   }
 
-  function updateSet(index: number, patch: Partial<LoggedSet>) {
+  function updateSet(part: number, index: number, patch: Partial<LoggedSet>) {
     setSetsByExercise((current) => ({
       ...current,
-      [exercise.id]: current[exercise.id].map((set, setIndex) =>
-        setIndex === index ? { ...set, ...patch } : set,
+      [exercise.id]: current[exercise.id].map((rows, partIndex) =>
+        partIndex === part
+          ? rows.map((set, setIndex) =>
+              setIndex === index ? { ...set, ...patch } : set,
+            )
+          : rows,
       ),
     }));
   }
@@ -121,6 +131,13 @@ export function WorkoutSession({
           </p>
         ) : null}
       </div>
+
+      {workout.warmup ? (
+        <section className="grid max-w-xl gap-2 border border-border bg-card p-4 sm:p-5">
+          <p className="text-xs uppercase tracking-[0.16em] text-primary">Warmup</p>
+          <p className="whitespace-pre-wrap leading-7">{workout.warmup}</p>
+        </section>
+      ) : null}
 
       <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">
         {workout.exercises.map((item, index) => {
@@ -214,87 +231,87 @@ export function WorkoutSession({
                 {exercise.name}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                {trackingLabel(exercise.trackingType)} ·{" "}
+                {circuit ? "Circuit" : trackingLabel(exercise.trackingType)} ·{" "}
                 {prescriptionLabel(exercise)} · {restLabel(exercise.restSeconds)}
               </p>
             </div>
           </div>
 
           <ol className="grid gap-3">
-            {rows.map((set, index) => {
-              const timerKey = `${exercise.id}:${index}`;
-              const running = runningKey === timerKey;
+            {(parts[0] ?? []).map((set, index) => {
+              const skipped = circuit
+                ? parts.every((rows) => rows[index]?.skipped)
+                : set.skipped;
               return (
                 <li
-                  key={timerKey}
+                  key={`${exercise.id}:${index}`}
                   className={cn(
                     "grid gap-3 border border-border p-3",
-                    set.skipped && "opacity-50",
+                    skipped && "opacity-50",
                   )}
                 >
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium">Set {index + 1}</p>
+                    <p className="text-sm font-medium">
+                      {circuit ? `Round ${index + 1}` : `Set ${index + 1}`}
+                    </p>
                     <button
                       type="button"
                       className="text-sm text-muted-foreground underline-offset-4 hover:underline"
                       onClick={() => {
-                        if (running) setRunningKey(null);
-                        updateSet(index, { skipped: !set.skipped });
+                        setRunningKey(null);
+                        if (circuit) {
+                          parts.forEach((_, part) =>
+                            updateSet(part, index, { skipped: !skipped }),
+                          );
+                          return;
+                        }
+                        updateSet(0, index, { skipped: !set.skipped });
                       }}
                     >
-                      {set.skipped ? "Undo skip" : "Skip"}
+                      {skipped ? "Undo skip" : "Skip"}
                     </button>
                   </div>
-                  {exercise.trackingType === "duration" ? (
-                    <div className="flex flex-wrap items-end gap-3">
-                      <p className="font-display text-4xl leading-none tabular-nums">
-                        {formatDuration(set.durationSeconds ?? 0)}
-                      </p>
-                      <Button
-                        type="button"
-                        variant={running ? "secondary" : "default"}
-                        onClick={() =>
-                          setRunningKey(running ? null : timerKey)
-                        }
-                      >
-                        {running ? "Stop" : "Start"}
-                      </Button>
-                      <label className="grid gap-1 text-xs text-muted-foreground">
-                        Seconds
-                        <Input
-                          inputMode="numeric"
-                          className="h-11 w-24"
-                          value={set.durationSeconds ?? ""}
-                          onChange={(event) =>
-                            updateSet(index, {
-                              durationSeconds:
-                                event.target.value === ""
-                                  ? undefined
-                                  : Number(event.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      {exercise.trackingType === "weight_reps" ? (
-                        <SetField
-                          label={unit}
-                          value={set.weight}
-                          onChange={(weight) => updateSet(index, { weight })}
-                        />
-                      ) : null}
-                      <SetField
-                        label="Reps"
-                        value={set.reps}
-                        onChange={(reps) => updateSet(index, { reps })}
-                        className={
-                          exercise.trackingType === "reps" ? "col-span-2" : undefined
-                        }
+                  {circuit
+                    ? exercise.movements?.map((movement, part) => {
+                        const logged = parts[part]?.[index] ?? {};
+                        const timerKey = `${exercise.id}:${part}:${index}`;
+                        const running = runningKey === timerKey;
+                        return (
+                          <div key={movement.position} className="grid gap-2">
+                            <p className="text-sm">
+                              {movement.name}
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {trackingLabel(movement.trackingType)} ·{" "}
+                                {movement.trackingType === "duration"
+                                  ? formatDuration(movement.targetDurationSeconds ?? 0)
+                                  : movement.targetRepsLabel || movement.targetReps}
+                              </span>
+                            </p>
+                            <MovementLog
+                              trackingType={movement.trackingType}
+                              unit={unit}
+                              set={logged}
+                              running={running}
+                              onStart={() => setRunningKey(running ? null : timerKey)}
+                              onChange={(patch) => updateSet(part, index, patch)}
+                            />
+                          </div>
+                        );
+                      })
+                    : (
+                      <MovementLog
+                        trackingType={exercise.trackingType}
+                        unit={unit}
+                        set={set}
+                        running={runningKey === `${exercise.id}:0:${index}`}
+                        onStart={() => {
+                          const timerKey = `${exercise.id}:0:${index}`;
+                          setRunningKey(runningKey === timerKey ? null : timerKey);
+                        }}
+                        onChange={(patch) => updateSet(0, index, patch)}
                       />
-                    </div>
-                  )}
+                    )}
                 </li>
               );
             })}
@@ -306,12 +323,12 @@ export function WorkoutSession({
             onClick={() =>
               setSetsByExercise((current) => ({
                 ...current,
-                [exercise.id]: [...current[exercise.id], {}],
+                [exercise.id]: current[exercise.id].map((rows) => [...rows, {}]),
               }))
             }
           >
             <Plus className="size-4" aria-hidden />
-            Add a set
+            {circuit ? "Add a round" : "Add a set"}
           </Button>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <Button
@@ -326,6 +343,70 @@ export function WorkoutSession({
           </Button>
         </section>
       </div>
+    </div>
+  );
+}
+
+function MovementLog({
+  trackingType,
+  unit,
+  set,
+  running,
+  onStart,
+  onChange,
+}: {
+  trackingType: Exercise["trackingType"];
+  unit: "lb" | "kg";
+  set: LoggedSet;
+  running: boolean;
+  onStart: () => void;
+  onChange: (patch: Partial<LoggedSet>) => void;
+}) {
+  if (trackingType === "duration") {
+    return (
+      <div className="flex flex-wrap items-end gap-3">
+        <p className="font-display text-4xl leading-none tabular-nums">
+          {formatDuration(set.durationSeconds ?? 0)}
+        </p>
+        <Button
+          type="button"
+          variant={running ? "secondary" : "default"}
+          onClick={onStart}
+        >
+          {running ? "Stop" : "Start"}
+        </Button>
+        <label className="grid gap-1 text-xs text-muted-foreground">
+          Seconds
+          <Input
+            inputMode="numeric"
+            className="h-11 w-24"
+            value={set.durationSeconds ?? ""}
+            onChange={(event) =>
+              onChange({
+                durationSeconds:
+                  event.target.value === "" ? undefined : Number(event.target.value),
+              })
+            }
+          />
+        </label>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {trackingType === "weight_reps" ? (
+        <SetField
+          label={unit}
+          value={set.weight}
+          onChange={(weight) => onChange({ weight })}
+        />
+      ) : null}
+      <SetField
+        label="Reps"
+        value={set.reps}
+        onChange={(reps) => onChange({ reps })}
+        className={trackingType === "reps" ? "col-span-2" : undefined}
+      />
     </div>
   );
 }
@@ -356,6 +437,20 @@ function SetField({
       />
     </label>
   );
+}
+
+function partsFor(exercise: Exercise): LoggedSet[][] {
+  const movements = exercise.movements ?? [];
+  if (movements.length < 2) return [padSets(exercise)];
+  return movements.map((movement) => {
+    const rows: LoggedSet[] = [];
+    for (const set of exercise.allLogs ?? []) {
+      if ((set.movement ?? 1) !== movement.position) continue;
+      rows[set.setIndex ?? rows.length] = set;
+    }
+    const count = Math.max(exercise.sets, rows.length);
+    return Array.from({ length: count }, (_, index) => rows[index] ?? {});
+  });
 }
 
 function padSets(exercise: Exercise): LoggedSet[] {

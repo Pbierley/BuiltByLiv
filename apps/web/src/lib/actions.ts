@@ -22,6 +22,8 @@ import {
   parseVenmoUsername,
   weighInSchema,
   workoutDraftSchema,
+  workoutRenameSchema,
+  workoutWarmupSchema,
 } from "@/lib/validation";
 import {
   createServiceClient,
@@ -293,6 +295,7 @@ export async function saveSession(input: unknown): Promise<ActionResult> {
           : set.weight != null
             ? "weight_reps"
             : "reps",
+      movement_position: set.movement ?? 1,
       reps: set.reps ?? null,
       weight_kg: set.weight == null ? null : toKilograms(set.weight, viewer.unit),
       duration_seconds: set.durationSeconds ?? null,
@@ -306,7 +309,18 @@ export async function saveSession(input: unknown): Promise<ActionResult> {
   if (deleteError) return { error: "The set log could not be saved." };
   if (rows.length) {
     const { error } = await supabase.from("session_sets").insert(rows);
-    if (error) return { error: "The set log could not be saved." };
+    if (error && columnMissing(error, "movement_position")) {
+      if (rows.some((row) => row.movement_position > 1)) {
+        return { error: circuitMigrationMessage };
+      }
+      const plain = rows.map(({ movement_position: _movement, ...row }) => row);
+      const retry = await supabase.from("session_sets").insert(plain);
+      if (retry.error) return { error: "The set log could not be saved." };
+    } else if (error?.code === "23505") {
+      return { error: circuitMigrationMessage };
+    } else if (error) {
+      return { error: "The set log could not be saved." };
+    }
   }
 
   if (parsed.data.complete) {
@@ -345,6 +359,92 @@ export async function sendMessage(memberId: string, body: string): Promise<Actio
   revalidatePath("/admin");
   revalidatePath("/app/account");
   return { ok: true };
+}
+
+const circuitMigrationMessage =
+  "Run supabase/migrations/20261121153000_circuits.sql in the Supabase SQL editor, then save again.";
+
+type MovementInput = {
+  name: string;
+  trackingType: "weight_reps" | "reps" | "duration";
+  targetReps?: number;
+  targetRepsLabel?: string;
+  targetDurationSeconds?: number;
+};
+
+function prepareExercise<T extends { movements?: MovementInput[] }>(exercise: T) {
+  const movements = (exercise.movements ?? [])
+    .map((movement) => ({
+      ...movement,
+      name: movement.name.trim(),
+      targetRepsLabel: movement.targetRepsLabel?.trim() || undefined,
+    }))
+    .filter((movement) => movement.name);
+  if (movements.length === 1) return { error: "A circuit needs 2 or 3 movements." };
+  if (movements.length > 3) return { error: "A circuit can include up to 3 movements." };
+  if (!movements.length) return { exercise, movements: [] as MovementInput[] };
+  for (const movement of movements) {
+    if (movement.trackingType === "duration") {
+      if (!movement.targetDurationSeconds) return { error: `Add a time for ${movement.name}.` };
+    } else if (!movement.targetReps && !movement.targetRepsLabel) {
+      return { error: `Add a rep target for ${movement.name}.` };
+    }
+  }
+  const first = movements[0];
+  return {
+    exercise: {
+      ...exercise,
+      trackingType: first.trackingType,
+      targetReps: first.targetReps,
+      targetRepsLabel: first.targetRepsLabel,
+      targetDurationSeconds: first.targetDurationSeconds,
+    },
+    movements,
+  };
+}
+
+function columnMissing(error: { code?: string; message?: string }, column: string) {
+  return (
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    (error.message ?? "").includes(column)
+  );
+}
+
+async function saveCircuitMovements(
+  supabase: Awaited<ReturnType<typeof createSupabase>>,
+  exerciseId: string,
+  movements: MovementInput[],
+) {
+  const { error: deleteError } = await supabase
+    .from("circuit_movements")
+    .delete()
+    .eq("workout_exercise_id", exerciseId);
+  if (deleteError) {
+    const missing =
+      deleteError.code === "42P01" ||
+      deleteError.code === "PGRST205" ||
+      (deleteError.message ?? "").includes("circuit_movements");
+    if (missing) return movements.length ? circuitMigrationMessage : null;
+    return "The circuit could not be saved.";
+  }
+  if (!movements.length) return null;
+  const { error } = await supabase.from("circuit_movements").insert(
+    movements.map((movement, index) => ({
+      id: newId(movement.name, "move"),
+      workout_exercise_id: exerciseId,
+      position: index + 1,
+      name: movement.name,
+      tracking_type: movement.trackingType,
+      target_reps: movement.trackingType === "duration" ? null : (movement.targetReps ?? null),
+      target_reps_label:
+        movement.trackingType === "duration" ? null : (movement.targetRepsLabel ?? null),
+      target_duration_seconds:
+        movement.trackingType === "duration" ? (movement.targetDurationSeconds ?? 45) : null,
+    })),
+  );
+  if (error) return "The circuit could not be saved.";
+  return null;
 }
 
 function storedReps(exercise: {
@@ -388,9 +488,13 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
   }
 
   const exerciseReps: { target_reps: number | null; target_reps_label: string | null }[] = [];
+  const preparedExercises = [];
   for (const exercise of parsed.data.exercises) {
-    const reps = storedReps(exercise);
+    const prepared = prepareExercise(exercise);
+    if ("error" in prepared) return prepared;
+    const reps = storedReps(prepared.exercise);
     if ("error" in reps) return { error: reps.error };
+    preparedExercises.push(prepared);
     exerciseReps.push(reps);
   }
 
@@ -399,14 +503,32 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
     program_id: parsed.data.programId,
     title: parsed.data.title,
     summary: parsed.data.summary || "Added by Liv.",
+    warmup: parsed.data.warmup?.trim() || null,
     published: true,
     position: 100,
     phase_id: parsed.data.phaseId ?? null,
   });
-  if (workoutError) return { error: "The workout could not be created." };
+  if (workoutError && columnMissing(workoutError, "warmup") && parsed.data.warmup?.trim()) {
+    return { error: warmupMigrationMessage };
+  }
+  if (workoutError && columnMissing(workoutError, "warmup")) {
+    const retry = await supabase.from("workouts").insert({
+      id: workoutId,
+      program_id: parsed.data.programId,
+      title: parsed.data.title,
+      summary: parsed.data.summary || "Added by Liv.",
+      published: true,
+      position: 100,
+      phase_id: parsed.data.phaseId ?? null,
+    });
+    if (retry.error) return { error: "The workout could not be created." };
+  } else if (workoutError) {
+    return { error: "The workout could not be created." };
+  }
 
   const exerciseIds: string[] = [];
-  for (const [index, exercise] of parsed.data.exercises.entries()) {
+  for (const [index, prepared] of preparedExercises.entries()) {
+    const exercise = prepared.exercise;
     const exerciseId = newId(exercise.name, "exercise");
     exerciseIds.push(exerciseId);
     const { error: exerciseError } = await supabase.from("exercises").insert({
@@ -433,12 +555,70 @@ export async function createWorkout(input: unknown): Promise<ActionResult & { wo
       rest_seconds: exercise.restSeconds,
     });
     if (linkError) return { error: "An exercise could not be added to the workout." };
+    const circuitError = await saveCircuitMovements(supabase, exerciseId, prepared.movements);
+    if (circuitError) {
+      await supabase.from("workout_exercises").delete().in("id", exerciseIds);
+      await supabase.from("exercises").delete().in("id", exerciseIds);
+      await supabase.from("workouts").delete().eq("id", workoutId);
+      return { error: circuitError };
+    }
   }
 
   revalidatePath("/admin");
   revalidatePath("/app/programs");
   revalidatePath("/app");
   return { ok: true, workoutId, exerciseIds };
+}
+
+const warmupMigrationMessage =
+  "Run supabase/migrations/20261121170000_workout_warmup.sql in the Supabase SQL editor, then save again.";
+
+export async function saveWorkoutWarmup(
+  workoutId: string,
+  warmup: string,
+): Promise<ActionResult> {
+  const parsed = workoutWarmupSchema.safeParse({ workoutId, warmup });
+  if (!parsed.success) return { error: "The warmup needs to be 2,000 characters or fewer." };
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can edit the warmup." };
+
+  const supabase = await createSupabase();
+  const { data, error } = await supabase
+    .from("workouts")
+    .update({ warmup: parsed.data.warmup || null })
+    .eq("id", parsed.data.workoutId)
+    .select("id")
+    .maybeSingle();
+  if (error && columnMissing(error, "warmup")) return { error: warmupMigrationMessage };
+  if (error || !data) return { error: "The warmup could not be saved." };
+
+  revalidatePath("/admin");
+  revalidatePath("/app");
+  revalidatePath("/app/programs");
+  revalidatePath(`/app/workouts/${parsed.data.workoutId}`);
+  return { ok: true };
+}
+
+export async function renameWorkout(workoutId: string, title: string): Promise<ActionResult> {
+  const parsed = workoutRenameSchema.safeParse({ workoutId, title });
+  if (!parsed.success) return { error: "Check the workout name." };
+  const viewer = await getViewer();
+  if (!viewer || viewer.role !== "admin") return { error: "Only Liv can rename workouts." };
+
+  const supabase = await createSupabase();
+  const { data, error } = await supabase
+    .from("workouts")
+    .update({ title: parsed.data.title })
+    .eq("id", parsed.data.workoutId)
+    .select("id")
+    .maybeSingle();
+  if (error || !data) return { error: "The workout name could not be saved." };
+
+  revalidatePath("/admin");
+  revalidatePath("/app");
+  revalidatePath("/app/programs");
+  revalidatePath(`/app/workouts/${parsed.data.workoutId}`);
+  return { ok: true };
 }
 
 export async function assignWorkoutPhase(
@@ -488,14 +668,16 @@ export async function addExercise(
   if (!parsed.success) return { error: "Check the exercise details." };
   const viewer = await getViewer();
   if (!viewer || viewer.role !== "admin") return { error: "Only Liv can add exercises." };
-  const reps = storedReps(parsed.data);
+  const prepared = prepareExercise(parsed.data);
+  if ("error" in prepared) return prepared;
+  const reps = storedReps(prepared.exercise);
   if ("error" in reps) return { error: reps.error };
 
   const supabase = await createSupabase();
   const { data: workout } = await supabase
     .from("workouts")
     .select("id")
-    .eq("id", parsed.data.workoutId)
+    .eq("id", prepared.exercise.workoutId)
     .maybeSingle();
   if (!workout) return { error: "That workout was not found." };
 
@@ -507,12 +689,12 @@ export async function addExercise(
     .limit(1)
     .maybeSingle();
 
-  const exerciseId = newId(parsed.data.name, "exercise");
+  const exerciseId = newId(prepared.exercise.name, "exercise");
   const { error: exerciseError } = await supabase.from("exercises").insert({
     id: exerciseId,
-    name: parsed.data.name,
-    coaching: parsed.data.coaching,
-    published: parsed.data.published,
+    name: prepared.exercise.name,
+    coaching: prepared.exercise.coaching,
+    published: prepared.exercise.published,
   });
   if (exerciseError) return { error: "The exercise could not be created." };
 
@@ -521,18 +703,26 @@ export async function addExercise(
     workout_id: workout.id,
     exercise_id: exerciseId,
     position: (last?.position ?? -1) + 1,
-    cue: parsed.data.cue || null,
-    tracking_type: parsed.data.trackingType,
-    sets: parsed.data.sets,
+    cue: prepared.exercise.cue || null,
+    tracking_type: prepared.exercise.trackingType,
+    sets: prepared.exercise.sets,
     target_reps: reps.target_reps,
     target_reps_label: reps.target_reps_label,
     target_duration_seconds:
-      parsed.data.trackingType === "duration" ? parsed.data.targetDurationSeconds ?? 45 : null,
-    rest_seconds: parsed.data.restSeconds,
+      prepared.exercise.trackingType === "duration"
+        ? prepared.exercise.targetDurationSeconds ?? 45
+        : null,
+    rest_seconds: prepared.exercise.restSeconds,
   });
   if (linkError) {
     await supabase.from("exercises").delete().eq("id", exerciseId);
     return { error: "The exercise could not be added to the workout." };
+  }
+  const circuitError = await saveCircuitMovements(supabase, exerciseId, prepared.movements);
+  if (circuitError) {
+    await supabase.from("workout_exercises").delete().eq("id", exerciseId);
+    await supabase.from("exercises").delete().eq("id", exerciseId);
+    return { error: circuitError };
   }
 
   revalidatePath("/admin");
@@ -547,39 +737,49 @@ export async function updateExercise(input: unknown): Promise<ActionResult> {
   const viewer = await getViewer();
   if (!viewer || viewer.role !== "admin") return { error: "Only Liv can edit workouts." };
 
-  const reps = storedReps(parsed.data);
+  const prepared = prepareExercise(parsed.data);
+  if ("error" in prepared) return prepared;
+  const reps = storedReps(prepared.exercise);
   if ("error" in reps) return { error: reps.error };
 
   const supabase = await createSupabase();
   const { error: exerciseError } = await supabase
     .from("exercises")
     .update({
-      name: parsed.data.name,
-      coaching: parsed.data.coaching,
-      published: parsed.data.published,
+      name: prepared.exercise.name,
+      coaching: prepared.exercise.coaching,
+      published: prepared.exercise.published,
     })
-    .eq("id", parsed.data.exerciseId);
+    .eq("id", prepared.exercise.exerciseId);
   if (exerciseError) return { error: "The exercise could not be saved." };
 
   const { data: link } = await supabase
     .from("workout_exercises")
     .select("workout_id")
-    .eq("id", parsed.data.exerciseId)
+    .eq("id", prepared.exercise.exerciseId)
     .maybeSingle();
   const { error: linkError } = await supabase
     .from("workout_exercises")
     .update({
-      cue: parsed.data.cue || null,
-      tracking_type: parsed.data.trackingType,
-      sets: parsed.data.sets,
+      cue: prepared.exercise.cue || null,
+      tracking_type: prepared.exercise.trackingType,
+      sets: prepared.exercise.sets,
       target_reps: reps.target_reps,
       target_reps_label: reps.target_reps_label,
       target_duration_seconds:
-        parsed.data.trackingType === "duration" ? parsed.data.targetDurationSeconds ?? 45 : null,
-      rest_seconds: parsed.data.restSeconds,
+        prepared.exercise.trackingType === "duration"
+          ? prepared.exercise.targetDurationSeconds ?? 45
+          : null,
+      rest_seconds: prepared.exercise.restSeconds,
     })
-    .eq("id", parsed.data.exerciseId);
+    .eq("id", prepared.exercise.exerciseId);
   if (linkError) return { error: "The prescription could not be saved." };
+  const circuitError = await saveCircuitMovements(
+    supabase,
+    prepared.exercise.exerciseId,
+    prepared.movements,
+  );
+  if (circuitError) return { error: circuitError };
   revalidatePath("/admin");
   revalidatePath("/app/programs");
   if (link?.workout_id) revalidatePath(`/app/workouts/${link.workout_id}`);

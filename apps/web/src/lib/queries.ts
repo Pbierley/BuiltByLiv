@@ -3,7 +3,7 @@ import "server-only";
 import { formatCalendarDate } from "@/lib/dates";
 import { fromKilograms } from "@/lib/units";
 import { ConfigError, createSupabase } from "@/lib/supabase/server";
-import type { Exercise, LoggedSet, Phase, Program, TrackingType, Workout } from "@/lib/content";
+import type { Exercise, LoggedSet, Phase, Program, TrackingType, Workout, CircuitMovement } from "@/lib/content";
 import { programProgress } from "@/lib/phases";
 
 export type Viewer = {
@@ -30,6 +30,15 @@ type ExerciseRow = {
   published: boolean;
 };
 
+type CircuitRow = {
+  position: number;
+  name: string;
+  tracking_type: TrackingType;
+  target_reps: number | null;
+  target_reps_label: string | null;
+  target_duration_seconds: number | null;
+};
+
 type LinkRow = {
   id: string;
   position: number;
@@ -41,6 +50,7 @@ type LinkRow = {
   target_duration_seconds: number | null;
   rest_seconds: number;
   exercises: ExerciseRow | ExerciseRow[];
+  circuit_movements?: CircuitRow[] | null;
 };
 
 type PhaseEmbed = {
@@ -56,6 +66,7 @@ type WorkoutRow = {
   program_id: string;
   title: string;
   summary: string;
+  warmup?: string | null;
   published: boolean;
   position: number;
   phase_id?: string | null;
@@ -138,60 +149,45 @@ export async function listPrograms(): Promise<Program[]> {
 
 export async function listWorkouts(programId?: string): Promise<Workout[]> {
   const supabase = await createSupabase();
-  const load = (columns: string) => {
-    let query = supabase.from("workouts").select(columns).order("position");
-    if (programId) query = query.eq("program_id", programId);
-    return query;
-  };
-  let { data, error } = await load(workoutSelect);
-  if (error && phaseSchemaMissing(error)) {
-    ({ data, error } = await load(workoutSelectWithoutPhases));
-  }
+  const { data, error } = await selectWorkouts(supabase, { programId });
   if (error) throw error;
   return ((data ?? []) as unknown as WorkoutRow[]).map((row) => toWorkout(row, []));
 }
 
 export async function getWorkoutForViewer(workoutId: string, viewer: Viewer) {
   const supabase = await createSupabase();
-  let { data, error } = await supabase
-    .from("workouts")
-    .select(workoutSelect)
-    .eq("id", workoutId)
-    .maybeSingle();
-  if (error && phaseSchemaMissing(error)) {
-    ({ data, error } = await supabase
-      .from("workouts")
-      .select(workoutSelectWithoutPhases)
-      .eq("id", workoutId)
-      .maybeSingle());
-  }
+  const { data, error } = await selectWorkouts(supabase, { workoutId });
   if (error) throw error;
   if (!data) return null;
 
-  const { data: session } = await supabase
-    .from("workout_sessions")
-    .select("id, session_sets(workout_exercise_id, set_index, reps, weight_kg, duration_seconds, skipped)")
-    .eq("user_id", viewer.id)
-    .eq("workout_id", workoutId)
-    .is("completed_at", null)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const session = (await loadOpenSession(supabase, viewer.id, workoutId)) as {
+    session_sets?: {
+      workout_exercise_id: string;
+      set_index: number;
+      movement_position?: number | null;
+      reps: number | null;
+      weight_kg: number | null;
+      duration_seconds: number | null;
+      skipped: boolean;
+    }[];
+  } | null;
 
   const logged = new Map<string, LoggedSet[]>();
   for (const set of session?.session_sets ?? []) {
     const rows = logged.get(set.workout_exercise_id) ?? [];
-    rows[set.set_index] = {
+    rows.push({
+      setIndex: set.set_index,
+      movement: set.movement_position ?? 1,
       reps: set.reps ?? undefined,
       weight:
         set.weight_kg == null ? undefined : fromKilograms(Number(set.weight_kg), viewer.unit),
       durationSeconds: set.duration_seconds ?? undefined,
       skipped: set.skipped || undefined,
-    };
+    });
     logged.set(set.workout_exercise_id, rows);
   }
 
-  return toWorkout(data as WorkoutRow, [...logged.entries()]);
+  return toWorkout(data as unknown as WorkoutRow, [...logged.entries()]);
 }
 
 export async function listWeighIns(viewer: Viewer) {
@@ -227,14 +223,41 @@ export type ExerciseProgress = {
 
 export async function listExerciseProgress(viewer: Viewer): Promise<ExerciseProgress[]> {
   const supabase = await createSupabase();
-  const { data, error } = await supabase
-    .from("workout_sessions")
-    .select(
-      "id, started_at, completed_at, session_sets(set_index, reps, weight_kg, duration_seconds, skipped, workout_exercises(exercises(name)))",
-    )
-    .eq("user_id", viewer.id)
-    .order("started_at", { ascending: true });
-  if (error) throw error;
+  const progressColumns = [
+    "id, started_at, completed_at, session_sets(set_index, movement_position, reps, weight_kg, duration_seconds, skipped, workout_exercises(exercises(name), circuit_movements(position, name)))",
+    "id, started_at, completed_at, session_sets(set_index, reps, weight_kg, duration_seconds, skipped, workout_exercises(exercises(name)))",
+  ];
+  type ProgressSession = {
+    started_at: string | null;
+    completed_at: string | null;
+    session_sets?: {
+      skipped: boolean;
+      movement_position?: number | null;
+      reps: number | null;
+      weight_kg: number | null;
+      duration_seconds: number | null;
+      workout_exercises?: {
+        exercises?: { name: string } | { name: string }[] | null;
+        circuit_movements?: { position: number; name: string }[] | null;
+      } | {
+        exercises?: { name: string } | { name: string }[] | null;
+        circuit_movements?: { position: number; name: string }[] | null;
+      }[] | null;
+    }[];
+  };
+  let data: ProgressSession[] | null = null;
+  for (const columns of progressColumns) {
+    try {
+      data = (await loadProgressRows(supabase, viewer.id, columns)) as unknown as ProgressSession[];
+      break;
+    } catch (error) {
+      const detail = error as { message?: string; details?: string | null };
+      if (!schemaMentions(detail, "movement_position") && !schemaMentions(detail, "circuit_movements")) {
+        throw error;
+      }
+    }
+  }
+  if (!data) return [];
 
   const groups = new Map<string, ExerciseProgress & { latest: string }>();
   for (const session of data ?? []) {
@@ -257,7 +280,8 @@ export async function listExerciseProgress(viewer: Viewer): Promise<ExerciseProg
       if (set.skipped) continue;
       const link = first(set.workout_exercises);
       const exercise = first(link?.exercises ?? null);
-      const name = exercise?.name?.trim() || "Exercise";
+      const movementName = circuitMovementName(link?.circuit_movements, set.movement_position);
+      const name = movementName || exercise?.name?.trim() || "Exercise";
       const id = name.toLowerCase();
       const bucket = logged.get(id) ?? {
         name,
@@ -463,12 +487,82 @@ export async function openWorkoutId(viewer: Viewer) {
 
 export { ConfigError };
 
-const workoutExercisesSelect =
-  "workout_exercises(id, position, cue, tracking_type, sets, target_reps, target_reps_label, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published))";
+const circuitSelect =
+  "circuit_movements(position, name, tracking_type, target_reps, target_reps_label, target_duration_seconds)";
 
-const workoutSelect = `id, program_id, title, summary, published, position, phase_id, phases(id, title, position, starts_week, ends_week), ${workoutExercisesSelect}`;
+const workoutExerciseColumns =
+  "id, position, cue, tracking_type, sets, target_reps, target_reps_label, target_duration_seconds, rest_seconds, exercises(id, name, coaching, video_path, published)";
 
-const workoutSelectWithoutPhases = `id, program_id, title, summary, published, position, ${workoutExercisesSelect}`;
+function workoutColumns(phases: boolean, circuits: boolean, warmup: boolean) {
+  const exercises = `workout_exercises(${workoutExerciseColumns}${circuits ? `, ${circuitSelect}` : ""})`;
+  const phaseColumns = phases
+    ? ", phase_id, phases(id, title, position, starts_week, ends_week)"
+    : "";
+  const warmupColumn = warmup ? ", warmup" : "";
+  return `id, program_id, title, summary${warmupColumn}, published, position${phaseColumns}, ${exercises}`;
+}
+
+async function selectWorkouts(
+  supabase: Awaited<ReturnType<typeof createSupabase>>,
+  filter: { programId?: string; workoutId?: string },
+) {
+  let phases = true;
+  let circuits = true;
+  let warmup = true;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let query = supabase.from("workouts").select(workoutColumns(phases, circuits, warmup));
+    if (filter.programId) query = query.eq("program_id", filter.programId);
+    if (filter.workoutId) query = query.eq("id", filter.workoutId);
+    const result = filter.workoutId
+      ? await query.maybeSingle()
+      : await query.order("position");
+    if (!result.error) return result;
+    const missingWarmup = schemaMentions(result.error, "warmup");
+    const missingCircuit = schemaMentions(result.error, "circuit_movements");
+    const missingPhase =
+      schemaMentions(result.error, "phase") ||
+      (phaseSchemaMissing(result.error) && !missingWarmup && !missingCircuit);
+    if (warmup && missingWarmup) {
+      warmup = false;
+      continue;
+    }
+    if (circuits && missingCircuit) {
+      circuits = false;
+      continue;
+    }
+    if (phases && missingPhase) {
+      phases = false;
+      continue;
+    }
+    return result;
+  }
+  return { data: null, error: { message: "The workouts could not be loaded." } };
+}
+
+async function loadOpenSession(
+  supabase: Awaited<ReturnType<typeof createSupabase>>,
+  userId: string,
+  workoutId: string,
+) {
+  const columns = [
+    "id, session_sets(workout_exercise_id, set_index, movement_position, reps, weight_kg, duration_seconds, skipped)",
+    "id, session_sets(workout_exercise_id, set_index, reps, weight_kg, duration_seconds, skipped)",
+  ];
+  for (const column of columns) {
+    const result = await supabase
+      .from("workout_sessions")
+      .select(column)
+      .eq("user_id", userId)
+      .eq("workout_id", workoutId)
+      .is("completed_at", null)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!result.error) return result.data;
+    if (!schemaMentions(result.error, "movement_position")) throw result.error;
+  }
+  return null;
+}
 
 export async function listPhases(programId?: string): Promise<Phase[]> {
   const supabase = await createSupabase();
@@ -502,13 +596,20 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
     programId: row.program_id,
     title: row.title,
     summary: row.summary,
+    warmup: row.warmup?.trim() || undefined,
     phaseId: row.phase_id,
     phaseTitle: phase?.title ?? null,
     phasePosition: phase?.position ?? null,
     phaseStartsWeek: phase?.starts_week ?? null,
     exercises: links.map((link) => {
       const exercise = first(link.exercises);
-      const sets = (byExercise.get(link.id) ?? []).filter(Boolean);
+      const sets = (byExercise.get(link.id) ?? []).filter((set) => set);
+      const logged: LoggedSet[] = [];
+      for (const set of sets) {
+        if ((set.movement ?? 1) !== 1) continue;
+        logged[set.setIndex ?? logged.length] = set;
+      }
+      const movements = circuitMovements(link.circuit_movements);
       return {
         id: link.id,
         name: exercise?.name ?? "Exercise",
@@ -520,12 +621,54 @@ function toWorkout(row: WorkoutRow, logged: [string, LoggedSet[]][]): Workout {
         targetRepsLabel: link.target_reps_label?.trim() || undefined,
         targetDurationSeconds: link.target_duration_seconds ?? undefined,
         restSeconds: link.rest_seconds,
-        logged: sets,
+        logged: logged.filter((set) => set),
+        allLogs: sets,
+        movements: movements.length >= 2 ? movements : undefined,
         hasVideo: Boolean(exercise?.video_path),
         published: exercise?.published ?? true,
       } satisfies Exercise;
     }),
   };
+}
+
+function circuitMovementName(
+  rows: { position: number; name: string }[] | null | undefined,
+  position: number | null | undefined,
+) {
+  const match = (rows ?? []).find((row) => row.position === (position ?? 1));
+  return match?.name?.trim() || "";
+}
+
+async function loadProgressRows(
+  supabase: Awaited<ReturnType<typeof createSupabase>>,
+  userId: string,
+  columns: string,
+) {
+  const { data, error } = await supabase
+    .from("workout_sessions")
+    .select(columns)
+    .eq("user_id", userId)
+    .order("started_at", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+function circuitMovements(rows: CircuitRow[] | null | undefined): CircuitMovement[] {
+  return [...(rows ?? [])]
+    .sort((a, b) => a.position - b.position)
+    .slice(0, 3)
+    .map((movement) => ({
+      position: movement.position,
+      name: movement.name,
+      trackingType: movement.tracking_type,
+      targetReps: movement.target_reps ?? undefined,
+      targetRepsLabel: movement.target_reps_label?.trim() || undefined,
+      targetDurationSeconds: movement.target_duration_seconds ?? undefined,
+    }));
+}
+
+function schemaMentions(error: { message?: string; details?: string | null }, name: string) {
+  return `${error.message ?? ""} ${error.details ?? ""}`.includes(name);
 }
 
 function relationMissing(error: { code?: string }) {

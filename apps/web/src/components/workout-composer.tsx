@@ -7,6 +7,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/field";
 import { VideoUpload } from "@/components/video-upload";
 import {
+  CircuitEditor,
+  circuitPayload,
+  movementsFromExercise,
+  type MovementDraft,
+} from "@/components/circuit-editor";
+import {
   normalizeRepTarget,
   trackingLabel,
   type Exercise,
@@ -28,6 +34,8 @@ type DraftExercise = {
   repsLabel: string;
   targetDuration: string;
   restSeconds: string;
+  circuit: boolean;
+  movements: MovementDraft[];
   videoName: string;
   videoUrl: string;
   videoFile: File | null;
@@ -53,6 +61,7 @@ export function WorkoutComposer({
   const programPhases = phases.filter((phase) => phase.programId === programId);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
+  const [warmup, setWarmup] = useState("");
   const [exercises, setExercises] = useState<DraftExercise[]>([
     blankExercise("ex-1"),
   ]);
@@ -110,10 +119,19 @@ export function WorkoutComposer({
               file: exercise.videoFile,
             };
           }
+          const circuitDetails = circuitPayload(exercise.circuit, exercise.movements);
+          if ("error" in circuitDetails) {
+            setError(circuitDetails.error ?? "Check the circuit.");
+            return;
+          }
+          const trackingType = circuitDetails.movements?.[0]?.trackingType ?? exercise.trackingType;
           const sets = numberOr(exercise.sets, 3);
           let targetReps: number | undefined;
           let targetRepsLabel: string | undefined;
-          if (exercise.trackingType !== "duration") {
+          if (circuitDetails.movements?.[0]) {
+            targetReps = circuitDetails.movements[0].targetReps;
+            targetRepsLabel = circuitDetails.movements[0].targetRepsLabel;
+          } else if (trackingType !== "duration") {
             const reps = normalizeRepTarget(exercise.repsLabel);
             if ("error" in reps) {
               setError(reps.error);
@@ -127,16 +145,21 @@ export function WorkoutComposer({
             name: exercise.name.trim(),
             coaching: exercise.coaching.trim(),
             cue: exercise.cue.trim() || undefined,
-            trackingType: exercise.trackingType,
+            trackingType,
             sets,
             targetReps,
             targetRepsLabel,
             targetDurationSeconds:
-              exercise.trackingType === "duration"
-                ? numberOr(exercise.targetDuration, 45)
+              trackingType === "duration"
+                ? (circuitDetails.movements?.[0]?.targetDurationSeconds ??
+                  numberOr(exercise.targetDuration, 45))
                 : undefined,
             restSeconds: numberOr(exercise.restSeconds, 60),
             logged: [],
+            movements: circuitDetails.movements?.map((movement, index) => ({
+              position: index + 1,
+              ...movement,
+            })),
           });
         }
 
@@ -146,6 +169,7 @@ export function WorkoutComposer({
             programId,
             title: workoutTitle,
             summary: summary.trim() || "Added by Liv.",
+            warmup: warmup.trim() || undefined,
             phaseId,
             exercises: built,
           },
@@ -236,6 +260,20 @@ export function WorkoutComposer({
           placeholder="Lower C"
         />
       </Field>
+      <Field
+        label="Warmup"
+        htmlFor="workout-warmup"
+        hint="Optional. Members see this above the exercises."
+      >
+        <Textarea
+          id="workout-warmup"
+          rows={4}
+          maxLength={2000}
+          value={warmup}
+          onChange={(event) => setWarmup(event.target.value)}
+          placeholder="5 minutes easy bike, then 2 rounds of banded walks."
+        />
+      </Field>
       <Field label="Summary" htmlFor="workout-summary">
         <Input
           id="workout-summary"
@@ -300,6 +338,13 @@ export function WorkoutComposer({
                 }
               />
             </Field>
+            <CircuitEditor
+              enabled={exercise.circuit}
+              movements={exercise.movements}
+              onEnabled={(enabled) => updateExercise(exercise.key, { circuit: enabled })}
+              onChange={(movements) => updateExercise(exercise.key, { movements })}
+            />
+            {exercise.circuit ? null : (
             <div className="grid gap-2 sm:grid-cols-3">
               {trackingTypes.map((type) => (
                 <button
@@ -317,11 +362,12 @@ export function WorkoutComposer({
                   )}
                 >
                   {trackingLabel(type)}
-                </button>
-              ))}
+              </button>
+            ))}
             </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Sets" htmlFor={`${exercise.key}-sets`}>
+              <Field label={exercise.circuit ? "Rounds" : "Sets"} htmlFor={`${exercise.key}-sets`}>
                 <Input
                   id={`${exercise.key}-sets`}
                   className="h-11"
@@ -332,7 +378,7 @@ export function WorkoutComposer({
                   }
                 />
               </Field>
-              {exercise.trackingType === "duration" ? (
+              {exercise.circuit ? null : exercise.trackingType === "duration" ? (
                 <Field label="Target seconds" htmlFor={`${exercise.key}-duration`}>
                   <Input
                     id={`${exercise.key}-duration`}
@@ -427,6 +473,8 @@ function blankExercise(key: string): DraftExercise {
     repsLabel: "8",
     targetDuration: "45",
     restSeconds: "90",
+    circuit: false,
+    movements: movementsFromExercise(),
     videoName: "",
     videoUrl: "",
     videoFile: null,

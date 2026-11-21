@@ -8,6 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Field } from "@/components/field";
+import {
+  CircuitEditor,
+  circuitPayload,
+  movementsFromExercise,
+  type MovementDraft,
+} from "@/components/circuit-editor";
 import { VideoUpload } from "@/components/video-upload";
 import {
   WorkoutComposer,
@@ -25,6 +31,8 @@ import {
   assignWorkoutPhase,
   createWorkout,
   deleteWorkout,
+  renameWorkout,
+  saveWorkoutWarmup,
   updateExercise,
   uploadExerciseVideo,
 } from "@/lib/actions";
@@ -64,6 +72,10 @@ export function AdminEditor({
   const [trackingType, setTrackingType] = useState<TrackingType>(
     exercise?.trackingType ?? "weight_reps",
   );
+  const [circuit, setCircuit] = useState(Boolean(exercise?.movements?.length));
+  const [movements, setMovements] = useState<MovementDraft[]>(() =>
+    movementsFromExercise(exercise),
+  );
   const [published, setPublished] = useState(exercise?.published ?? true);
   const [saved, setSaved] = useState(false);
   const clip = editing ? videos[editing.id] : draftVideo;
@@ -80,6 +92,8 @@ export function AdminEditor({
     setPendingExerciseId(null);
     setAddingExercise(true);
     setTrackingType("weight_reps");
+    setCircuit(false);
+    setMovements(movementsFromExercise());
     setPublished(true);
     setSaved(false);
     setError("");
@@ -115,6 +129,8 @@ export function AdminEditor({
     }
     setExerciseId(nextExercise.id);
     setTrackingType(nextExercise.trackingType);
+    setCircuit(Boolean(nextExercise.movements?.length));
+    setMovements(movementsFromExercise(nextExercise));
     setPublished(nextExercise.published ?? true);
     setSaved(false);
   }
@@ -134,6 +150,8 @@ export function AdminEditor({
     }
     setExerciseId(nextExercise.id);
     setTrackingType(nextExercise.trackingType);
+    setCircuit(Boolean(nextExercise.movements?.length));
+    setMovements(movementsFromExercise(nextExercise));
     setPublished(nextExercise.published ?? true);
     setSaved(false);
   }
@@ -146,6 +164,8 @@ export function AdminEditor({
     clearDraftVideo();
     setExerciseId(next.id);
     setTrackingType(next.trackingType);
+    setCircuit(Boolean(next.movements?.length));
+    setMovements(movementsFromExercise(next));
     setPublished(next.published ?? true);
     setSaved(false);
   }
@@ -259,6 +279,7 @@ export function AdminEditor({
               programId: created.programId,
               title: created.title,
               summary: created.summary,
+              warmup: created.warmup,
               phaseId: created.phaseId ?? null,
               exercises: created.exercises.map((item) => ({
                 name: item.name,
@@ -270,6 +291,13 @@ export function AdminEditor({
                 targetRepsLabel: item.targetRepsLabel,
                 targetDurationSeconds: item.targetDurationSeconds,
                 restSeconds: item.restSeconds,
+                movements: item.movements?.map((movement) => ({
+                  name: movement.name,
+                  trackingType: movement.trackingType,
+                  targetReps: movement.targetReps,
+                  targetRepsLabel: movement.targetRepsLabel,
+                  targetDurationSeconds: movement.targetDurationSeconds,
+                })),
               })),
             });
             if (result.error || !result.exerciseIds) {
@@ -291,12 +319,14 @@ export function AdminEditor({
         />
       ) : workout ? (
       <div className="grid min-w-0 gap-5">
+      <RenameWorkout key={`name-${workout.id}`} workout={workout} />
+      <WorkoutWarmup key={`warmup-${workout.id}`} workout={workout} />
       <PhaseAssign
         workout={workout}
         phases={phases.filter((phase) => phase.programId === workout.programId)}
       />
       <DeleteWorkout
-        key={workout.id}
+        key={`delete-${workout.id}`}
         title={workout.title}
         onDelete={async () => {
           const result = await deleteWorkout(workout.id);
@@ -315,7 +345,13 @@ export function AdminEditor({
           const form = new FormData(event.currentTarget);
           let targetReps: number | undefined;
           let targetRepsLabel: string | undefined;
-          if (trackingType !== "duration") {
+          const circuitDetails = circuitPayload(circuit, movements);
+          if ("error" in circuitDetails) {
+            setError(circuitDetails.error ?? "Check the circuit.");
+            setSaved(false);
+            return;
+          }
+          if (!circuit && trackingType !== "duration") {
             const reps = normalizeRepTarget(
               String(form.get("reps") ?? ""),
               editing?.targetReps,
@@ -332,14 +368,21 @@ export function AdminEditor({
             name: form.get("name"),
             coaching: form.get("coaching"),
             cue: String(form.get("cue") ?? ""),
-            trackingType,
+            trackingType: circuit
+              ? (circuitDetails.movements?.[0]?.trackingType ?? trackingType)
+              : trackingType,
             sets: Number(form.get("sets")),
-            targetReps,
-            targetRepsLabel,
-            targetDurationSeconds: Number(
-              form.get("duration") || editing?.targetDurationSeconds || 45,
-            ),
+            targetReps: circuit
+              ? circuitDetails.movements?.[0]?.targetReps
+              : targetReps,
+            targetRepsLabel: circuit
+              ? circuitDetails.movements?.[0]?.targetRepsLabel
+              : targetRepsLabel,
+            targetDurationSeconds: circuit
+              ? (circuitDetails.movements?.[0]?.targetDurationSeconds ?? 45)
+              : Number(form.get("duration") || editing?.targetDurationSeconds || 45),
             restSeconds: Number(form.get("rest")),
+            movements: circuitDetails.movements,
             published,
           };
           if (editing) {
@@ -400,7 +443,7 @@ export function AdminEditor({
                   : "border-border",
               )}
             >
-              {item.name}
+              {item.movements?.length ? `${item.name} · Circuit` : item.name}
             </button>
           ))}
           <button
@@ -447,6 +490,20 @@ export function AdminEditor({
           />
         </Field>
 
+        <CircuitEditor
+          enabled={circuit}
+          movements={movements}
+          onEnabled={(next) => {
+            setCircuit(next);
+            setSaved(false);
+          }}
+          onChange={(next) => {
+            setMovements(next);
+            setSaved(false);
+          }}
+        />
+
+        {circuit ? null : (
         <fieldset className="grid gap-2">
           <legend className="text-sm font-medium">Tracking</legend>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -471,9 +528,10 @@ export function AdminEditor({
             ))}
           </div>
         </fieldset>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Sets" htmlFor="sets">
+          <Field label={circuit ? "Rounds" : "Sets"} htmlFor="sets">
             <Input
               id="sets"
               className="h-11"
@@ -483,7 +541,7 @@ export function AdminEditor({
               key={`sets-${editing?.id ?? "new"}`}
             />
           </Field>
-          {trackingType === "duration" ? (
+          {circuit ? null : trackingType === "duration" ? (
             <Field label="Target seconds" htmlFor="target-duration">
               <Input
                 id="target-duration"
@@ -564,6 +622,103 @@ export function AdminEditor({
         <p className="text-sm text-muted-foreground">No workouts in this program yet.</p>
       )}
     </div>
+  );
+}
+
+function RenameWorkout({ workout }: { workout: Workout }) {
+  const router = useRouter();
+  const [title, setTitle] = useState(workout.title);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [pending, setPending] = useState(false);
+  const unchanged = title.trim() === workout.title;
+
+  return (
+    <form
+      className="grid gap-3 border border-border bg-card p-4 sm:p-5"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (unchanged) return;
+        setPending(true);
+        const result = await renameWorkout(workout.id, title);
+        setError(result.error ?? "");
+        setSaved(!result.error);
+        setPending(false);
+        if (!result.error) router.refresh();
+      }}
+    >
+      <Field label="Workout name" htmlFor="workout-title">
+        <Input
+          id="workout-title"
+          className="h-11"
+          maxLength={80}
+          value={title}
+          onChange={(event) => {
+            setTitle(event.target.value);
+            setSaved(false);
+            setError("");
+          }}
+        />
+      </Field>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" className="h-11" disabled={pending || unchanged}>
+          Save name
+        </Button>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {saved ? <p className="text-sm text-muted-foreground">Saved.</p> : null}
+      </div>
+    </form>
+  );
+}
+
+function WorkoutWarmup({ workout }: { workout: Workout }) {
+  const router = useRouter();
+  const [warmup, setWarmup] = useState(workout.warmup ?? "");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [pending, setPending] = useState(false);
+  const unchanged = warmup.trim() === (workout.warmup ?? "");
+
+  return (
+    <form
+      className="grid gap-3 border border-border bg-card p-4 sm:p-5"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (unchanged) return;
+        setPending(true);
+        const result = await saveWorkoutWarmup(workout.id, warmup);
+        setError(result.error ?? "");
+        setSaved(!result.error);
+        setPending(false);
+        if (!result.error) router.refresh();
+      }}
+    >
+      <Field
+        label="Warmup"
+        htmlFor="workout-warmup"
+        hint="Optional. Members see this above the exercises. Leave it blank to skip the warmup."
+      >
+        <Textarea
+          id="workout-warmup"
+          rows={4}
+          maxLength={2000}
+          value={warmup}
+          onChange={(event) => {
+            setWarmup(event.target.value);
+            setSaved(false);
+            setError("");
+          }}
+          placeholder="5 minutes easy bike, then 2 rounds of banded walks and bodyweight squats."
+        />
+      </Field>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" className="h-11" disabled={pending || unchanged}>
+          Save warmup
+        </Button>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {saved ? <p className="text-sm text-muted-foreground">Saved.</p> : null}
+      </div>
+    </form>
   );
 }
 
